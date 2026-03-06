@@ -89,7 +89,7 @@ def add_tooth_chart_entry(conn, args):
     if surface:
         _validate_surface(surface)
 
-    tooth_system = getattr(args, "tooth_system", "universal")
+    tooth_system = getattr(args, "tooth_system", None) or "universal"
     _validate_enum(tooth_system, VALID_TOOTH_SYSTEMS, "tooth-system")
 
     entry_id = str(uuid.uuid4())
@@ -193,7 +193,7 @@ def add_dental_procedure(conn, args):
     if quadrant:
         _validate_enum(quadrant, VALID_QUADRANTS, "quadrant")
 
-    fee = str(round_currency(to_decimal(getattr(args, "fee", "0.00"))))
+    fee = str(round_currency(to_decimal(getattr(args, "fee", None) or "0.00")))
 
     proc_id = str(uuid.uuid4())
     now = _now_iso()
@@ -259,9 +259,9 @@ def add_treatment_plan(conn, args):
     except (json.JSONDecodeError, TypeError):
         err("--phases must be valid JSON array")
 
-    estimated_total = str(round_currency(to_decimal(getattr(args, "estimated_total", "0.00"))))
-    insurance_estimate = str(round_currency(to_decimal(getattr(args, "insurance_estimate", "0.00"))))
-    patient_estimate = str(round_currency(to_decimal(getattr(args, "patient_estimate", "0.00"))))
+    estimated_total = str(round_currency(to_decimal(getattr(args, "estimated_total", None) or "0.00")))
+    insurance_estimate = str(round_currency(to_decimal(getattr(args, "insurance_estimate", None) or "0.00")))
+    patient_estimate = str(round_currency(to_decimal(getattr(args, "patient_estimate", None) or "0.00")))
 
     plan_id = str(uuid.uuid4())
     now = _now_iso()
@@ -363,13 +363,13 @@ def add_perio_exam(conn, args):
     if not conn.execute("SELECT id FROM employee WHERE id = ?", (args.provider_id,)).fetchone():
         err(f"Provider {args.provider_id} not found")
 
-    measurements = getattr(args, "measurements", "{}")
+    measurements = getattr(args, "measurements", None) or "{}"
     try:
         json.loads(measurements)
     except (json.JSONDecodeError, TypeError):
         err("--measurements must be valid JSON object")
 
-    bleeding_sites = getattr(args, "bleeding_sites", "[]")
+    bleeding_sites = getattr(args, "bleeding_sites", None) or "[]"
     try:
         json.loads(bleeding_sites)
     except (json.JSONDecodeError, TypeError):
@@ -384,8 +384,8 @@ def add_perio_exam(conn, args):
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'complete', ?, ?)""",
         (exam_id, args.patient_id, args.company_id, args.provider_id, args.exam_date,
          measurements, bleeding_sites,
-         getattr(args, "furcation_data", "{}"), getattr(args, "mobility_data", "{}"),
-         getattr(args, "recession_data", "{}"), getattr(args, "plaque_score", None),
+         getattr(args, "furcation_data", None) or "{}", getattr(args, "mobility_data", None) or "{}",
+         getattr(args, "recession_data", None) or "{}", getattr(args, "plaque_score", None),
          getattr(args, "notes", None), now, now)
     )
     audit(conn, "healthclaw_perio_exam", exam_id, "add-perio-exam", args.company_id)

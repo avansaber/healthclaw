@@ -306,7 +306,7 @@ def calculate_dose(conn, args):
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (entry_id, args.company_id, args.animal_patient_id, weight_date,
          str(weight_kg), args.medication_name, str(dose_per_kg), str(calculated_dose),
-         getattr(args, "dose_unit", "mg"), route,
+         getattr(args, "dose_unit", None) or "mg", route,
          getattr(args, "frequency", None), getattr(args, "notes", None),
          now, now)
     )
@@ -318,7 +318,7 @@ def calculate_dose(conn, args):
         "weight_kg": str(weight_kg),
         "dose_per_kg": str(dose_per_kg),
         "calculated_dose": str(calculated_dose),
-        "dose_unit": getattr(args, "dose_unit", "mg"),
+        "dose_unit": getattr(args, "dose_unit", None) or "mg",
     })
 
 
