@@ -1,0 +1,81 @@
+ocui_version: "1.0"
+skill: healthclaw-dental
+skill_version: "1.0.0"
+display_name: Dental Practice
+icon: tooth
+color: "#0ea5e9"
+default_entity: tooth_chart
+
+domains:
+  - key: tooth_charts
+    label: Tooth Charts
+    entities: [tooth_chart]
+  - key: procedures
+    label: Dental Procedures
+    entities: [dental_procedure]
+  - key: treatment_plans
+    label: Treatment Plans
+    entities: [treatment_plan]
+  - key: periodontal
+    label: Periodontal
+    entities: [perio_exam]
+
+dashboard:
+  kpis:
+    - key: treatment_plans
+      label: "Treatment Plans"
+      type: count
+      action: dental-list-treatment-plans
+      icon: clipboard-list
+      drill_action: dental-list-treatment-plans
+    - key: proposed_plans
+      label: "Proposed Plans"
+      type: count
+      action: dental-list-treatment-plans
+      filter: { status: proposed }
+      severity: info
+      icon: clipboard
+      drill_action: dental-list-treatment-plans
+      drill_filter: { status: proposed }
+    - key: dental_procedures
+      label: "Procedures"
+      type: count
+      action: dental-list-dental-procedures
+      icon: stethoscope
+      drill_action: dental-list-dental-procedures
+    - key: perio_exams
+      label: "Perio Exams"
+      type: count
+      action: dental-list-perio-exams
+      icon: activity
+      drill_action: dental-list-perio-exams
+  quick_actions:
+    - action: dental-add-tooth-chart-entry
+      label: "Chart Entry"
+      icon: tooth
+    - action: dental-add-dental-procedure
+      label: "New Procedure"
+      icon: stethoscope
+    - action: dental-add-treatment-plan
+      label: "New Treatment Plan"
+      icon: clipboard-list
+    - action: dental-add-perio-exam
+      label: "New Perio Exam"
+      icon: activity
+
+workflows:
+  - after: dental-add-tooth-chart-entry
+    suggest:
+      - action: dental-add-treatment-plan
+        label: "Create treatment plan"
+        pass: { patient-id: patient_id }
+  - after: dental-add-treatment-plan
+    suggest:
+      - action: dental-add-dental-procedure
+        label: "Record procedure"
+        pass: { patient-id: patient_id }
+  - after: dental-add-perio-exam
+    suggest:
+      - action: dental-compare-perio-exams
+        label: "Compare with previous exam"
+        pass: { exam-id-1: id }

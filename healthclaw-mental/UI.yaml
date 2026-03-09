@@ -1,0 +1,81 @@
+ocui_version: "1.0"
+skill: healthclaw-mental
+skill_version: "1.0.0"
+display_name: Mental Health
+icon: brain
+color: "#8b5cf6"
+default_entity: therapy_session
+
+domains:
+  - key: sessions
+    label: Therapy Sessions
+    entities: [therapy_session]
+  - key: assessments
+    label: Assessments
+    entities: [assessment]
+  - key: goals
+    label: Treatment Goals
+    entities: [treatment_goal]
+  - key: groups
+    label: Group Sessions
+    entities: [group_session]
+
+dashboard:
+  kpis:
+    - key: total_sessions
+      label: "Therapy Sessions"
+      type: count
+      action: mentalhealth-list-therapy-sessions
+      icon: message-circle
+      drill_action: mentalhealth-list-therapy-sessions
+    - key: total_assessments
+      label: "Assessments"
+      type: count
+      action: mentalhealth-list-assessments
+      icon: clipboard-check
+      drill_action: mentalhealth-list-assessments
+    - key: active_goals
+      label: "Active Goals"
+      type: count
+      action: mentalhealth-list-treatment-goals
+      filter: { goal-status: active }
+      severity: success
+      icon: target
+      drill_action: mentalhealth-list-treatment-goals
+      drill_filter: { goal-status: active }
+    - key: group_sessions
+      label: "Group Sessions"
+      type: count
+      action: mentalhealth-list-group-sessions
+      icon: users
+      drill_action: mentalhealth-list-group-sessions
+  quick_actions:
+    - action: mentalhealth-add-therapy-session
+      label: "New Session"
+      icon: message-circle
+    - action: mentalhealth-add-assessment
+      label: "New Assessment"
+      icon: clipboard-check
+    - action: mentalhealth-add-treatment-goal
+      label: "New Goal"
+      icon: target
+    - action: mentalhealth-add-group-session
+      label: "New Group Session"
+      icon: users
+
+workflows:
+  - after: mentalhealth-add-therapy-session
+    suggest:
+      - action: mentalhealth-add-assessment
+        label: "Administer assessment"
+        pass: { patient-id: patient_id }
+      - action: mentalhealth-add-treatment-goal
+        label: "Set treatment goal"
+        pass: { patient-id: patient_id }
+  - after: mentalhealth-add-assessment
+    suggest:
+      - action: mentalhealth-compare-assessments
+        label: "Compare with previous"
+        pass: { assessment-id-1: id }
+      - action: mentalhealth-update-treatment-goal
+        label: "Update goal progress"

@@ -2,8 +2,8 @@
 name: healthclaw
 version: 2.0.0
 description: AI-native hospital and multi-department healthcare ERP. 140 actions across 11 domains -- patients, appointments, clinical, billing, inventory, lab, referrals + advanced pharmacy, advanced lab, advanced billing, advanced reports. Built on ERPClaw foundation with HIPAA-friendly architecture, ICD-10/CPT coding, insurance claims, prior authorization, pharmacy/DEA compliance, and full clinical documentation.
-author: AvanSaber / Nikhil Jathar
-homepage: https://www.healthclaw.ai
+author: AvanSaber
+homepage: https://github.com/avansaber/healthclaw
 source: https://github.com/avansaber/healthclaw
 tier: 4
 category: healthcare
@@ -270,12 +270,12 @@ For all actions: `python3 {baseDir}/scripts/db_query.py --action <action> [flags
 ### Key Concepts
 - **Patient = Customer**, Provider = Employee. Encounter = clinical hub for vitals/diagnoses/prescriptions/procedures/notes.
 - **Claim Lifecycle**: draft -> submitted -> accepted/denied -> paid/appealed. Prior Auth tracked with usage counts.
-- **Advanced domains** use `hcadv_` table prefix and `adv-` action prefix where names conflict with core actions.
+- **Advanced domains** use `adv-` action prefix where names conflict with core actions. All tables use `healthclaw_` prefix.
 - **DEA compliance**: Controlled substance prescriptions require DEA number. Schedule II cannot have refills.
 
 ## Technical Details (Tier 3)
 
-**Tables owned (47):** 35 core (healthclaw_*) + 12 advanced (hcadv_*): hcadv_medication, hcadv_prescription, hcadv_dispense_log, hcadv_lab_test, hcadv_lab_order, hcadv_lab_result, hcadv_procedure_code, hcadv_charge, hcadv_claim, hcadv_payment_posting, hcadv_drug_interaction, hcadv_controlled_substance_log
+**Tables owned (40):** All use `healthclaw_` prefix. 35 core + 5 advanced (healthclaw_medication, healthclaw_dispense_log, healthclaw_procedure_code, healthclaw_drug_interaction, healthclaw_controlled_substance_log). 7 former hcadv_ duplicate tables merged into their core counterparts (charge, claim, payment_posting, lab_order, lab_result, lab_test, prescription).
 
 **Script:** `scripts/db_query.py` routes to 11 domain modules: patients.py, appointments.py, clinical.py, billing.py, inventory.py, lab.py, referrals.py, adv_pharmacy.py, adv_lab.py, adv_billing.py, adv_reports.py
 

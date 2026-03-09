@@ -2,9 +2,9 @@
 """HealthClaw schema extension — adds domain tables to the shared database.
 
 AI-native hospital and multi-department healthcare ERP.
-47 tables across 11 domains:
+40 tables across 11 domains:
   Core (35 tables, 7 domains): patients, appointments, clinical, billing, inventory, lab, referrals
-  Advanced (12 tables, 4 domains): pharmacy, lab (hcadv), billing (hcadv), reports
+  Advanced (5 tables, 2 domains): pharmacy, controlled substances
 
 Prerequisite: ERPClaw init_db.py must have run first (creates foundation tables).
 Run: python3 init_db.py [db_path]
@@ -449,29 +449,42 @@ def create_healthclaw_tables(db_path):
             ON healthclaw_diagnosis(diagnosis_type);
 
         -- Prescription (medication orders)
+        -- Merged from hcadv_prescription: medication_id, rx_number, quantity_prescribed,
+        --   refills_authorized, refills_used, dea_number, rx_status, prescribed_date, expiry_date
         CREATE TABLE IF NOT EXISTS healthclaw_prescription (
             id              TEXT PRIMARY KEY,
             naming_series   TEXT,
-            encounter_id    TEXT NOT NULL REFERENCES healthclaw_encounter(id) ON DELETE RESTRICT,
+            encounter_id    TEXT REFERENCES healthclaw_encounter(id) ON DELETE RESTRICT,
             patient_id      TEXT NOT NULL REFERENCES healthclaw_patient(id) ON DELETE RESTRICT,
             prescriber_id   TEXT NOT NULL REFERENCES employee(id) ON DELETE RESTRICT,
-            medication_name TEXT NOT NULL,
+            medication_name TEXT,
+            medication_id   TEXT,             -- from hcadv: links to healthclaw_medication
             ndc_code        TEXT,            -- National Drug Code
+            rx_number       TEXT,             -- from hcadv: prescription number
             dosage          TEXT NOT NULL,    -- e.g., "500mg"
             frequency       TEXT NOT NULL,    -- e.g., "BID", "Q8H", "PRN"
             route           TEXT NOT NULL DEFAULT 'oral'
                             CHECK(route IN ('oral','iv','im','subq','topical','inhaled',
                                            'rectal','ophthalmic','otic','nasal','sublingual','transdermal','other')),
             quantity        TEXT NOT NULL DEFAULT '0',
+            quantity_prescribed INTEGER NOT NULL DEFAULT 0, -- from hcadv
             refills         INTEGER NOT NULL DEFAULT 0,
+            refills_authorized INTEGER NOT NULL DEFAULT 0, -- from hcadv
+            refills_used    INTEGER NOT NULL DEFAULT 0,    -- from hcadv
             daw             INTEGER NOT NULL DEFAULT 0 CHECK(daw IN (0,1)),  -- dispense as written
-            start_date      TEXT NOT NULL,
+            dea_number      TEXT,             -- from hcadv: DEA number for controlled substances
+            start_date      TEXT,
             end_date        TEXT,
+            prescribed_date TEXT,             -- from hcadv: date prescribed
+            expiry_date     TEXT,             -- from hcadv: prescription expiry
             diagnosis_id    TEXT REFERENCES healthclaw_diagnosis(id) ON DELETE RESTRICT,
             controlled_schedule TEXT CHECK(controlled_schedule IN ('II','III','IV','V')),
             pharmacy_notes  TEXT,
             status          TEXT NOT NULL DEFAULT 'active'
-                            CHECK(status IN ('active','completed','discontinued','cancelled','on_hold')),
+                            CHECK(status IN ('active','completed','discontinued','cancelled','on_hold',
+                                             'filled','partially_filled','expired')),
+            rx_status       TEXT DEFAULT 'active'
+                            CHECK(rx_status IN ('active','filled','partially_filled','expired','cancelled')),
             discontinued_reason TEXT,
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
@@ -631,24 +644,31 @@ def create_healthclaw_tables(db_path):
             ON healthclaw_fee_schedule_item(cpt_code);
 
         -- Individual charges (line items billed for services)
+        -- Merged from hcadv_charge: procedure_code_id, icd10_codes, description, unit_fee, total_fee, quantity
         CREATE TABLE IF NOT EXISTS healthclaw_charge (
             id              TEXT PRIMARY KEY,
             naming_series   TEXT,
-            encounter_id    TEXT NOT NULL REFERENCES healthclaw_encounter(id) ON DELETE RESTRICT,
+            encounter_id    TEXT REFERENCES healthclaw_encounter(id) ON DELETE RESTRICT,
             patient_id      TEXT NOT NULL REFERENCES healthclaw_patient(id) ON DELETE RESTRICT,
             procedure_id    TEXT REFERENCES healthclaw_procedure(id) ON DELETE RESTRICT,
-            cpt_code        TEXT NOT NULL,
+            procedure_code_id TEXT,           -- from hcadv: links to healthclaw_procedure_code
+            cpt_code        TEXT,
             modifiers       TEXT,
             diagnosis_ids   TEXT,            -- JSON array of ICD-10 pointers
+            icd10_codes     TEXT DEFAULT '[]', -- from hcadv: JSON array of ICD-10 codes
+            description     TEXT,             -- from hcadv: charge description
             units           INTEGER NOT NULL DEFAULT 1,
+            quantity        INTEGER NOT NULL DEFAULT 1, -- from hcadv: synonym for units
             charge_amount   TEXT NOT NULL DEFAULT '0',
+            unit_fee        TEXT NOT NULL DEFAULT '0.00', -- from hcadv: per-unit fee
+            total_fee       TEXT NOT NULL DEFAULT '0.00', -- from hcadv: quantity * unit_fee
             allowed_amount  TEXT NOT NULL DEFAULT '0',
             fee_schedule_id TEXT REFERENCES healthclaw_fee_schedule(id) ON DELETE RESTRICT,
             service_date    TEXT NOT NULL,
             provider_id     TEXT NOT NULL REFERENCES employee(id) ON DELETE RESTRICT,
             place_of_service TEXT NOT NULL DEFAULT '11',  -- CMS POS code (11=Office)
-            status          TEXT NOT NULL DEFAULT 'unbilled'
-                            CHECK(status IN ('unbilled','billed','paid','adjusted','void')),
+            charge_status   TEXT NOT NULL DEFAULT 'unbilled'
+                            CHECK(charge_status IN ('unbilled','billed','paid','adjusted','void')),
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
             created_at      TEXT DEFAULT (datetime('now')),
@@ -661,23 +681,33 @@ def create_healthclaw_tables(db_path):
         CREATE INDEX IF NOT EXISTS idx_hc_charge_patient
             ON healthclaw_charge(patient_id);
         CREATE INDEX IF NOT EXISTS idx_hc_charge_status
-            ON healthclaw_charge(status);
+            ON healthclaw_charge(charge_status);
         CREATE INDEX IF NOT EXISTS idx_hc_charge_date
             ON healthclaw_charge(service_date);
         CREATE INDEX IF NOT EXISTS idx_hc_charge_cpt
             ON healthclaw_charge(cpt_code);
 
         -- Insurance claim header
+        -- Merged from hcadv_claim: payer_name, payer_id_number, policy_number, group_number,
+        --   claim_number, charge_ids, total_charged, total_adjustment, submitted_date, response_date
         CREATE TABLE IF NOT EXISTS healthclaw_claim (
             id              TEXT PRIMARY KEY,
             naming_series   TEXT,
             patient_id      TEXT NOT NULL REFERENCES healthclaw_patient(id) ON DELETE RESTRICT,
-            insurance_id    TEXT NOT NULL REFERENCES healthclaw_patient_insurance(id) ON DELETE RESTRICT,
-            encounter_id    TEXT NOT NULL REFERENCES healthclaw_encounter(id) ON DELETE RESTRICT,
+            insurance_id    TEXT REFERENCES healthclaw_patient_insurance(id) ON DELETE RESTRICT,
+            encounter_id    TEXT REFERENCES healthclaw_encounter(id) ON DELETE RESTRICT,
+            payer_name      TEXT,             -- from hcadv: payer name (when no insurance_id)
+            payer_id_number TEXT,             -- from hcadv: payer EDI identifier
+            policy_number   TEXT,             -- from hcadv: insurance policy number
+            group_number    TEXT,             -- from hcadv: insurance group number
+            claim_number    TEXT,             -- from hcadv: external claim tracking number
             claim_date      TEXT NOT NULL,
+            charge_ids      TEXT NOT NULL DEFAULT '[]', -- from hcadv: JSON array of charge IDs
             total_charge    TEXT NOT NULL DEFAULT '0',
+            total_charged   TEXT NOT NULL DEFAULT '0.00', -- from hcadv: alias for total_charge
             total_allowed   TEXT NOT NULL DEFAULT '0',
             total_paid      TEXT NOT NULL DEFAULT '0',
+            total_adjustment TEXT NOT NULL DEFAULT '0.00', -- from hcadv: total adjustments
             patient_responsibility TEXT NOT NULL DEFAULT '0',
             adjustment_amount TEXT NOT NULL DEFAULT '0',
             billing_provider_id TEXT REFERENCES employee(id) ON DELETE RESTRICT,
@@ -688,9 +718,11 @@ def create_healthclaw_tables(db_path):
             filing_indicator TEXT,           -- e.g., "CI" for commercial insurance
             prior_auth_id   TEXT REFERENCES healthclaw_prior_auth(id) ON DELETE RESTRICT,
             sales_invoice_id TEXT REFERENCES sales_invoice(id) ON DELETE RESTRICT,
-            status          TEXT NOT NULL DEFAULT 'draft'
-                            CHECK(status IN ('draft','submitted','accepted','denied',
+            claim_status    TEXT NOT NULL DEFAULT 'draft'
+                            CHECK(claim_status IN ('draft','submitted','accepted','denied',
                                              'partially_paid','paid','appealed','void')),
+            submitted_date  TEXT,             -- from hcadv: date claim was submitted
+            response_date   TEXT,             -- from hcadv: date payer responded
             denial_reason   TEXT,
             appeal_deadline TEXT,
             notes           TEXT,
@@ -707,7 +739,11 @@ def create_healthclaw_tables(db_path):
         CREATE INDEX IF NOT EXISTS idx_hc_claim_encounter
             ON healthclaw_claim(encounter_id);
         CREATE INDEX IF NOT EXISTS idx_hc_claim_status
-            ON healthclaw_claim(status);
+            ON healthclaw_claim(claim_status);
+        CREATE INDEX IF NOT EXISTS idx_hc_claim_payer
+            ON healthclaw_claim(payer_name);
+        CREATE INDEX IF NOT EXISTS idx_hc_claim_number
+            ON healthclaw_claim(claim_number);
         CREATE INDEX IF NOT EXISTS idx_hc_claim_date
             ON healthclaw_claim(claim_date);
         CREATE INDEX IF NOT EXISTS idx_hc_claim_invoice
@@ -739,13 +775,19 @@ def create_healthclaw_tables(db_path):
             ON healthclaw_claim_line(charge_id);
 
         -- Insurance / patient payment posting
+        -- Merged from hcadv_payment_posting: charge_id, allowed_amount, paid_amount, adjustment, patient_responsibility
         CREATE TABLE IF NOT EXISTS healthclaw_payment_posting (
             id              TEXT PRIMARY KEY,
             claim_id        TEXT REFERENCES healthclaw_claim(id) ON DELETE RESTRICT,
+            charge_id       TEXT REFERENCES healthclaw_charge(id) ON DELETE RESTRICT, -- from hcadv
             patient_id      TEXT NOT NULL REFERENCES healthclaw_patient(id) ON DELETE RESTRICT,
-            posting_type    TEXT NOT NULL CHECK(posting_type IN ('insurance_payment','patient_payment','adjustment','refund','write_off')),
+            posting_type    TEXT CHECK(posting_type IN ('insurance_payment','patient_payment','adjustment','refund','write_off')),
             posting_date    TEXT NOT NULL,
             amount          TEXT NOT NULL DEFAULT '0',
+            allowed_amount  TEXT NOT NULL DEFAULT '0.00', -- from hcadv
+            paid_amount     TEXT NOT NULL DEFAULT '0.00', -- from hcadv
+            adjustment      TEXT NOT NULL DEFAULT '0.00', -- from hcadv
+            patient_responsibility TEXT NOT NULL DEFAULT '0.00', -- from hcadv
             check_number    TEXT,
             payer_name      TEXT,
             payment_method  TEXT CHECK(payment_method IN ('check','eft','cash','credit_card','ach','other')),
@@ -858,23 +900,29 @@ def create_healthclaw_tables(db_path):
         -- ==========================================================
 
         -- Lab order header
+        -- Merged from hcadv_lab_order: ordering_provider, lab_test_id, order_status, clinical_notes, collected_at, completed_at
         CREATE TABLE IF NOT EXISTS healthclaw_lab_order (
             id              TEXT PRIMARY KEY,
             naming_series   TEXT,
             order_id        TEXT REFERENCES healthclaw_order(id) ON DELETE RESTRICT,
-            encounter_id    TEXT NOT NULL REFERENCES healthclaw_encounter(id) ON DELETE RESTRICT,
+            encounter_id    TEXT REFERENCES healthclaw_encounter(id) ON DELETE RESTRICT,
             patient_id      TEXT NOT NULL REFERENCES healthclaw_patient(id) ON DELETE RESTRICT,
-            ordering_provider_id TEXT NOT NULL REFERENCES employee(id) ON DELETE RESTRICT,
+            ordering_provider_id TEXT REFERENCES employee(id) ON DELETE RESTRICT,
+            ordering_provider TEXT,           -- from hcadv: provider name (when no FK)
+            lab_test_id     TEXT,             -- from hcadv: links to healthclaw_lab_test
             order_date      TEXT NOT NULL,
             priority        TEXT NOT NULL DEFAULT 'routine'
                             CHECK(priority IN ('stat','urgent','routine')),
             fasting_required INTEGER NOT NULL DEFAULT 0 CHECK(fasting_required IN (0,1)),
             clinical_indication TEXT,
+            clinical_notes  TEXT,             -- from hcadv: clinical notes
             specimen_type   TEXT,            -- e.g., "blood", "urine", "tissue"
             collection_date TEXT,
             received_date   TEXT,
-            status          TEXT NOT NULL DEFAULT 'ordered'
-                            CHECK(status IN ('ordered','collected','received','in_progress',
+            collected_at    TEXT,             -- from hcadv: collection timestamp
+            completed_at    TEXT,             -- from hcadv: completion timestamp
+            order_status    TEXT NOT NULL DEFAULT 'ordered'
+                            CHECK(order_status IN ('ordered','collected','received','in_progress',
                                              'completed','cancelled')),
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
@@ -890,19 +938,31 @@ def create_healthclaw_tables(db_path):
         CREATE INDEX IF NOT EXISTS idx_hc_labord_provider
             ON healthclaw_lab_order(ordering_provider_id);
         CREATE INDEX IF NOT EXISTS idx_hc_labord_status
-            ON healthclaw_lab_order(status);
+            ON healthclaw_lab_order(order_status);
         CREATE INDEX IF NOT EXISTS idx_hc_labord_date
             ON healthclaw_lab_order(order_date);
 
         -- Individual lab tests within an order
+        -- Merged from hcadv_lab_test: company_id, loinc_code, category, specimen_type,
+        --   reference_range, unit, turnaround_hours, base_price, is_active, notes
         CREATE TABLE IF NOT EXISTS healthclaw_lab_test (
             id              TEXT PRIMARY KEY,
-            lab_order_id    TEXT NOT NULL REFERENCES healthclaw_lab_order(id) ON DELETE RESTRICT,
-            test_code       TEXT NOT NULL,    -- LOINC or internal code
+            lab_order_id    TEXT REFERENCES healthclaw_lab_order(id) ON DELETE RESTRICT,
+            company_id      TEXT REFERENCES company(id) ON DELETE RESTRICT, -- from hcadv
+            test_code       TEXT,             -- LOINC or internal code
             test_name       TEXT NOT NULL,
+            loinc_code      TEXT,             -- from hcadv: LOINC code
             cpt_code        TEXT,
+            category        TEXT,             -- from hcadv: test category
+            specimen_type   TEXT,             -- from hcadv: specimen type
+            reference_range TEXT,             -- from hcadv: expected range
+            unit            TEXT,             -- from hcadv: measurement unit
+            turnaround_hours INTEGER,         -- from hcadv: expected turnaround
+            base_price      TEXT NOT NULL DEFAULT '0.00', -- from hcadv: test price
+            is_active       INTEGER NOT NULL DEFAULT 1,   -- from hcadv
             status          TEXT NOT NULL DEFAULT 'pending'
                             CHECK(status IN ('pending','in_progress','completed','cancelled')),
+            notes           TEXT,             -- from hcadv
             created_at      TEXT DEFAULT (datetime('now')),
             updated_at      TEXT DEFAULT (datetime('now'))
         );
@@ -912,20 +972,34 @@ def create_healthclaw_tables(db_path):
             ON healthclaw_lab_test(test_code);
 
         -- Lab test results
+        -- Merged from hcadv_lab_result: company_id, lab_order_id, patient_id, result_value,
+        --   result_unit, reference_range, is_abnormal, is_critical, performed_by, verified_by, result_notes
         CREATE TABLE IF NOT EXISTS healthclaw_lab_result (
             id              TEXT PRIMARY KEY,
             lab_test_id     TEXT NOT NULL REFERENCES healthclaw_lab_test(id) ON DELETE RESTRICT,
-            component_name  TEXT NOT NULL,    -- e.g., "Hemoglobin", "WBC"
-            value           TEXT NOT NULL,
+            lab_order_id    TEXT,             -- from hcadv: direct link to lab order
+            company_id      TEXT REFERENCES company(id) ON DELETE RESTRICT, -- from hcadv
+            patient_id      TEXT,             -- from hcadv: patient reference
+            component_name  TEXT,             -- e.g., "Hemoglobin", "WBC"
+            value           TEXT,
+            result_value    TEXT,             -- from hcadv: result value
             unit            TEXT,             -- e.g., "g/dL", "cells/mcL"
+            result_unit     TEXT,             -- from hcadv: result unit
             reference_low   TEXT,
             reference_high  TEXT,
+            reference_range TEXT,             -- from hcadv: combined reference range
             flag            TEXT CHECK(flag IN ('normal','low','high','critical_low','critical_high','abnormal')),
+            is_abnormal     INTEGER NOT NULL DEFAULT 0, -- from hcadv
+            is_critical     INTEGER NOT NULL DEFAULT 0, -- from hcadv
             result_date     TEXT NOT NULL,
             performed_by_id TEXT REFERENCES employee(id) ON DELETE RESTRICT,
             verified_by_id  TEXT REFERENCES employee(id) ON DELETE RESTRICT,
+            performed_by    TEXT,             -- from hcadv: performer name (when no FK)
+            verified_by     TEXT,             -- from hcadv: verifier name (when no FK)
             notes           TEXT,
-            created_at      TEXT DEFAULT (datetime('now'))
+            result_notes    TEXT,             -- from hcadv: result-specific notes
+            created_at      TEXT DEFAULT (datetime('now')),
+            updated_at      TEXT DEFAULT (datetime('now'))  -- from hcadv
         );
         CREATE INDEX IF NOT EXISTS idx_hc_labres_test
             ON healthclaw_lab_result(lab_test_id);
@@ -1104,13 +1178,15 @@ def create_healthclaw_tables(db_path):
     """)
 
     # ══════════════════════════════════════════════════════════════
-    # HealthClaw Advanced Domain Tables (12 tables, hcadv_ prefix)
-    # Pharmacy, Lab, Billing, Drug Interactions, Controlled Substances
+    # HealthClaw Advanced Domain Tables (5 tables, healthclaw_ prefix)
+    # Medication, Dispense Log, Procedure Code, Drug Interaction,
+    # Controlled Substance Log
+    # (7 former hcadv_ duplicates merged into core tables above)
     # ══════════════════════════════════════════════════════════════
 
-    # -- hcadv_medication --
+    # -- healthclaw_medication (renamed from hcadv_medication) --
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS hcadv_medication (
+        CREATE TABLE IF NOT EXISTS healthclaw_medication (
             id                  TEXT PRIMARY KEY,
             company_id          TEXT NOT NULL REFERENCES company(id),
             name                TEXT NOT NULL,
@@ -1130,49 +1206,18 @@ def create_healthclaw_tables(db_path):
             updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_med_company ON hcadv_medication(company_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_med_name ON hcadv_medication(name)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_med_ndc ON hcadv_medication(ndc_code)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_med_schedule ON hcadv_medication(dea_schedule)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_med_company ON healthclaw_medication(company_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_med_name ON healthclaw_medication(name)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_med_ndc ON healthclaw_medication(ndc_code)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_med_schedule ON healthclaw_medication(dea_schedule)")
 
-    # -- hcadv_prescription --
+    # -- healthclaw_dispense_log (renamed from hcadv_dispense_log) --
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS hcadv_prescription (
+        CREATE TABLE IF NOT EXISTS healthclaw_dispense_log (
             id                  TEXT PRIMARY KEY,
             company_id          TEXT NOT NULL REFERENCES company(id),
-            patient_id          TEXT NOT NULL,
-            prescriber_id       TEXT NOT NULL,
-            medication_id       TEXT NOT NULL REFERENCES hcadv_medication(id),
-            rx_number           TEXT,
-            dosage              TEXT NOT NULL,
-            frequency           TEXT NOT NULL,
-            route               TEXT NOT NULL DEFAULT 'oral',
-            quantity_prescribed INTEGER NOT NULL DEFAULT 0,
-            refills_authorized  INTEGER NOT NULL DEFAULT 0,
-            refills_used        INTEGER NOT NULL DEFAULT 0,
-            dea_number          TEXT,
-            rx_status           TEXT NOT NULL DEFAULT 'active'
-                                CHECK(rx_status IN ('active','filled','partially_filled','expired','cancelled')),
-            prescribed_date     TEXT NOT NULL,
-            expiry_date         TEXT,
-            notes               TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_rx_company ON hcadv_prescription(company_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_rx_patient ON hcadv_prescription(patient_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_rx_med ON hcadv_prescription(medication_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_rx_status ON hcadv_prescription(rx_status)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_rx_prescriber ON hcadv_prescription(prescriber_id)")
-
-    # -- hcadv_dispense_log --
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS hcadv_dispense_log (
-            id                  TEXT PRIMARY KEY,
-            company_id          TEXT NOT NULL REFERENCES company(id),
-            prescription_id     TEXT NOT NULL REFERENCES hcadv_prescription(id),
-            medication_id       TEXT NOT NULL REFERENCES hcadv_medication(id),
+            prescription_id     TEXT NOT NULL,
+            medication_id       TEXT NOT NULL REFERENCES healthclaw_medication(id),
             dispensed_by        TEXT NOT NULL,
             quantity_dispensed  INTEGER NOT NULL DEFAULT 0,
             dispense_date       TEXT NOT NULL,
@@ -1183,96 +1228,14 @@ def create_healthclaw_tables(db_path):
             created_at          TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_disp_company ON hcadv_dispense_log(company_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_disp_rx ON hcadv_dispense_log(prescription_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_disp_med ON hcadv_dispense_log(medication_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_disp_date ON hcadv_dispense_log(dispense_date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_disp_company ON healthclaw_dispense_log(company_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_displog_rx ON healthclaw_dispense_log(prescription_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_displog_med ON healthclaw_dispense_log(medication_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_displog_date ON healthclaw_dispense_log(dispense_date)")
 
-    # -- hcadv_lab_test --
+    # -- healthclaw_procedure_code (renamed from hcadv_procedure_code) --
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS hcadv_lab_test (
-            id                  TEXT PRIMARY KEY,
-            company_id          TEXT NOT NULL REFERENCES company(id),
-            test_name           TEXT NOT NULL,
-            test_code           TEXT,
-            loinc_code          TEXT,
-            category            TEXT,
-            specimen_type       TEXT,
-            reference_range     TEXT,
-            unit                TEXT,
-            turnaround_hours    INTEGER,
-            base_price          TEXT NOT NULL DEFAULT '0.00',
-            is_active           INTEGER NOT NULL DEFAULT 1,
-            notes               TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_lt_company ON hcadv_lab_test(company_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_lt_name ON hcadv_lab_test(test_name)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_lt_loinc ON hcadv_lab_test(loinc_code)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_lt_code ON hcadv_lab_test(test_code)")
-
-    # -- hcadv_lab_order --
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS hcadv_lab_order (
-            id                  TEXT PRIMARY KEY,
-            company_id          TEXT NOT NULL REFERENCES company(id),
-            patient_id          TEXT NOT NULL,
-            ordering_provider   TEXT NOT NULL,
-            lab_test_id         TEXT NOT NULL REFERENCES hcadv_lab_test(id),
-            order_date          TEXT NOT NULL,
-            priority            TEXT NOT NULL DEFAULT 'routine'
-                                CHECK(priority IN ('routine','stat','urgent')),
-            order_status        TEXT NOT NULL DEFAULT 'ordered'
-                                CHECK(order_status IN ('ordered','collected','in_progress','completed','cancelled')),
-            clinical_notes      TEXT,
-            fasting_required    INTEGER NOT NULL DEFAULT 0,
-            collected_at        TEXT,
-            completed_at        TEXT,
-            notes               TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_lo_company ON hcadv_lab_order(company_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_lo_patient ON hcadv_lab_order(patient_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_lo_test ON hcadv_lab_order(lab_test_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_lo_status ON hcadv_lab_order(order_status)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_lo_provider ON hcadv_lab_order(ordering_provider)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_lo_date ON hcadv_lab_order(order_date)")
-
-    # -- hcadv_lab_result --
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS hcadv_lab_result (
-            id                  TEXT PRIMARY KEY,
-            company_id          TEXT NOT NULL REFERENCES company(id),
-            lab_order_id        TEXT NOT NULL REFERENCES hcadv_lab_order(id),
-            lab_test_id         TEXT NOT NULL REFERENCES hcadv_lab_test(id),
-            patient_id          TEXT NOT NULL,
-            result_value        TEXT,
-            result_unit         TEXT,
-            reference_range     TEXT,
-            is_abnormal         INTEGER NOT NULL DEFAULT 0,
-            is_critical         INTEGER NOT NULL DEFAULT 0,
-            performed_by        TEXT,
-            verified_by         TEXT,
-            result_date         TEXT NOT NULL,
-            result_notes        TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_lr_company ON hcadv_lab_result(company_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_lr_order ON hcadv_lab_result(lab_order_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_lr_test ON hcadv_lab_result(lab_test_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_lr_patient ON hcadv_lab_result(patient_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_lr_abnormal ON hcadv_lab_result(is_abnormal)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_lr_critical ON hcadv_lab_result(is_critical)")
-
-    # -- hcadv_procedure_code --
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS hcadv_procedure_code (
+        CREATE TABLE IF NOT EXISTS healthclaw_procedure_code (
             id                  TEXT PRIMARY KEY,
             company_id          TEXT NOT NULL REFERENCES company(id),
             code                TEXT NOT NULL,
@@ -1287,103 +1250,17 @@ def create_healthclaw_tables(db_path):
             updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_pc_company ON hcadv_procedure_code(company_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_pc_code ON hcadv_procedure_code(code)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_pc_type ON hcadv_procedure_code(code_type)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_pc_company ON healthclaw_procedure_code(company_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_pc_code ON healthclaw_procedure_code(code)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_pc_type ON healthclaw_procedure_code(code_type)")
 
-    # -- hcadv_charge --
+    # -- healthclaw_drug_interaction (renamed from hcadv_drug_interaction) --
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS hcadv_charge (
+        CREATE TABLE IF NOT EXISTS healthclaw_drug_interaction (
             id                  TEXT PRIMARY KEY,
             company_id          TEXT NOT NULL REFERENCES company(id),
-            patient_id          TEXT NOT NULL,
-            provider_id         TEXT NOT NULL,
-            procedure_code_id   TEXT REFERENCES hcadv_procedure_code(id),
-            service_date        TEXT NOT NULL,
-            cpt_code            TEXT,
-            icd10_codes         TEXT DEFAULT '[]',
-            description         TEXT,
-            quantity            INTEGER NOT NULL DEFAULT 1,
-            unit_fee            TEXT NOT NULL DEFAULT '0.00',
-            total_fee           TEXT NOT NULL DEFAULT '0.00',
-            charge_status       TEXT NOT NULL DEFAULT 'unbilled'
-                                CHECK(charge_status IN ('unbilled','billed','paid','adjusted','void')),
-            notes               TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_chg_company ON hcadv_charge(company_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_chg_patient ON hcadv_charge(patient_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_chg_provider ON hcadv_charge(provider_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_chg_date ON hcadv_charge(service_date)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_chg_status ON hcadv_charge(charge_status)")
-
-    # -- hcadv_claim --
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS hcadv_claim (
-            id                  TEXT PRIMARY KEY,
-            company_id          TEXT NOT NULL REFERENCES company(id),
-            patient_id          TEXT NOT NULL,
-            payer_name          TEXT NOT NULL,
-            payer_id_number     TEXT,
-            policy_number       TEXT,
-            group_number        TEXT,
-            claim_number        TEXT,
-            charge_ids          TEXT NOT NULL DEFAULT '[]',
-            total_charged       TEXT NOT NULL DEFAULT '0.00',
-            total_allowed       TEXT NOT NULL DEFAULT '0.00',
-            total_paid          TEXT NOT NULL DEFAULT '0.00',
-            total_adjustment    TEXT NOT NULL DEFAULT '0.00',
-            patient_responsibility TEXT NOT NULL DEFAULT '0.00',
-            claim_status        TEXT NOT NULL DEFAULT 'draft'
-                                CHECK(claim_status IN ('draft','submitted','accepted','denied','paid','appealed')),
-            submitted_date      TEXT,
-            response_date       TEXT,
-            denial_reason       TEXT,
-            notes               TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_clm_company ON hcadv_claim(company_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_clm_patient ON hcadv_claim(patient_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_clm_payer ON hcadv_claim(payer_name)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_clm_status ON hcadv_claim(claim_status)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_clm_number ON hcadv_claim(claim_number)")
-
-    # -- hcadv_payment_posting --
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS hcadv_payment_posting (
-            id                  TEXT PRIMARY KEY,
-            company_id          TEXT NOT NULL REFERENCES company(id),
-            claim_id            TEXT NOT NULL REFERENCES hcadv_claim(id),
-            charge_id           TEXT REFERENCES hcadv_charge(id),
-            patient_id          TEXT NOT NULL,
-            payer_name          TEXT NOT NULL,
-            posting_date        TEXT NOT NULL,
-            allowed_amount      TEXT NOT NULL DEFAULT '0.00',
-            paid_amount         TEXT NOT NULL DEFAULT '0.00',
-            adjustment          TEXT NOT NULL DEFAULT '0.00',
-            patient_responsibility TEXT NOT NULL DEFAULT '0.00',
-            payment_method      TEXT,
-            check_number        TEXT,
-            notes               TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now'))
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_pp_company ON hcadv_payment_posting(company_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_pp_claim ON hcadv_payment_posting(claim_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_pp_patient ON hcadv_payment_posting(patient_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_pp_date ON hcadv_payment_posting(posting_date)")
-
-    # -- hcadv_drug_interaction --
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS hcadv_drug_interaction (
-            id                  TEXT PRIMARY KEY,
-            company_id          TEXT NOT NULL REFERENCES company(id),
-            medication_a_id     TEXT NOT NULL REFERENCES hcadv_medication(id),
-            medication_b_id     TEXT NOT NULL REFERENCES hcadv_medication(id),
+            medication_a_id     TEXT NOT NULL REFERENCES healthclaw_medication(id),
+            medication_b_id     TEXT NOT NULL REFERENCES healthclaw_medication(id),
             severity            TEXT NOT NULL DEFAULT 'moderate'
                                 CHECK(severity IN ('minor','moderate','major','contraindicated')),
             description         TEXT NOT NULL,
@@ -1391,17 +1268,17 @@ def create_healthclaw_tables(db_path):
             created_at          TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_di_company ON hcadv_drug_interaction(company_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_di_med_a ON hcadv_drug_interaction(medication_a_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_di_med_b ON hcadv_drug_interaction(medication_b_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_di_company ON healthclaw_drug_interaction(company_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_di_med_a ON healthclaw_drug_interaction(medication_a_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_di_med_b ON healthclaw_drug_interaction(medication_b_id)")
 
-    # -- hcadv_controlled_substance_log --
+    # -- healthclaw_controlled_substance_log (renamed from hcadv_controlled_substance_log) --
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS hcadv_controlled_substance_log (
+        CREATE TABLE IF NOT EXISTS healthclaw_controlled_substance_log (
             id                  TEXT PRIMARY KEY,
             company_id          TEXT NOT NULL REFERENCES company(id),
-            medication_id       TEXT NOT NULL REFERENCES hcadv_medication(id),
-            prescription_id     TEXT REFERENCES hcadv_prescription(id),
+            medication_id       TEXT NOT NULL REFERENCES healthclaw_medication(id),
+            prescription_id     TEXT,
             action_type         TEXT NOT NULL
                                 CHECK(action_type IN ('received','dispensed','destroyed','returned','adjusted')),
             quantity            INTEGER NOT NULL,
@@ -1413,11 +1290,11 @@ def create_healthclaw_tables(db_path):
             created_at          TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_csl_company ON hcadv_controlled_substance_log(company_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_csl_med ON hcadv_controlled_substance_log(medication_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_csl_rx ON hcadv_controlled_substance_log(prescription_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_csl_date ON hcadv_controlled_substance_log(log_date)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_hcadv_csl_type ON hcadv_controlled_substance_log(action_type)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_csl_company ON healthclaw_controlled_substance_log(company_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_csl_med ON healthclaw_controlled_substance_log(medication_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_csl_rx ON healthclaw_controlled_substance_log(prescription_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_csl_date ON healthclaw_controlled_substance_log(log_date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_csl_type ON healthclaw_controlled_substance_log(action_type)")
 
     # ── Register naming series for all existing companies ────────
     companies = conn.execute("SELECT id FROM company").fetchall()
@@ -1450,15 +1327,15 @@ def create_healthclaw_tables(db_path):
 
     # ── Verify table creation ────────────────────────────────────
     tables_after = [r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE 'healthclaw_%' OR name LIKE 'hcadv_%')"
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'healthclaw_%'"
     ).fetchall()]
     indexes_after = [r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='index' AND (name LIKE 'idx_hc_%' OR name LIKE 'idx_hcadv_%')"
+        "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_hc_%'"
     ).fetchall()]
 
     conn.close()
     print(f"{DISPLAY_NAME} schema created in {db_path}", file=sys.stderr)
-    print(f"  Tables: {len(tables_after)} (35 core + 12 advanced)", file=sys.stderr)
+    print(f"  Tables: {len(tables_after)} (35 core + 5 advanced, all healthclaw_ prefix)", file=sys.stderr)
     print(f"  Indexes: {len(indexes_after)}", file=sys.stderr)
     print(f"  Naming series: {len(naming_series)} per company ({len(companies)} companies)", file=sys.stderr)
 

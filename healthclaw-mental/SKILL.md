@@ -2,8 +2,8 @@
 name: healthclaw-mental
 version: 1.0.0
 description: Mental health expansion for HealthClaw -- therapy sessions, standardized assessments (PHQ-9, GAD-7, AUDIT), treatment goals, and group therapy with auto-scoring and trend comparison.
-author: AvanSaber / Nikhil Jathar
-homepage: https://www.healthclaw.ai
+author: AvanSaber
+homepage: https://github.com/avansaber/healthclaw
 source: https://github.com/avansaber/healthclaw
 tier: 4
 category: healthcare

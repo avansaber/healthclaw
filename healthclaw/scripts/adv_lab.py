@@ -18,8 +18,8 @@ try:
 except ImportError:
     pass
 
-ENTITY_PREFIXES.setdefault("hcadv_lab_order", "LO-")
-ENTITY_PREFIXES.setdefault("hcadv_lab_result", "LR-")
+ENTITY_PREFIXES.setdefault("healthclaw_lab_order", "LO-")
+ENTITY_PREFIXES.setdefault("healthclaw_lab_result", "LR-")
 
 # ---- Constants ---------------------------------------------------------------
 
@@ -56,7 +56,7 @@ def add_lab_test(conn, args):
     test_id = str(uuid.uuid4())
     now = _now_iso()
     conn.execute(
-        """INSERT INTO hcadv_lab_test
+        """INSERT INTO healthclaw_lab_test
            (id, company_id, test_name, test_code, loinc_code, category,
             specimen_type, reference_range, unit, turnaround_hours,
             base_price, is_active, notes, created_at, updated_at)
@@ -71,7 +71,7 @@ def add_lab_test(conn, args):
          turnaround_hours, base_price,
          getattr(args, "notes", None), now, now)
     )
-    audit(conn, "hcadv_lab_test", test_id, "health-add-lab-test", args.company_id)
+    audit(conn, "healthclaw_lab_test", test_id, "health-add-lab-test", args.company_id)
     conn.commit()
     ok({"id": test_id, "test_name": args.test_name, "base_price": base_price})
 
@@ -90,12 +90,12 @@ def list_lab_tests(conn, args):
         s = f"%{args.search}%"
         params.extend([s, s, s])
     where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM hcadv_lab_test WHERE {where_sql}", params).fetchone()[0]
+    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_lab_test WHERE {where_sql}", params).fetchone()[0]
     limit = getattr(args, "limit", None) or 50
     offset = getattr(args, "offset", None) or 0
     params.extend([limit, offset])
     rows = conn.execute(
-        f"SELECT * FROM hcadv_lab_test WHERE {where_sql} ORDER BY test_name ASC LIMIT ? OFFSET ?", params
+        f"SELECT * FROM healthclaw_lab_test WHERE {where_sql} ORDER BY test_name ASC LIMIT ? OFFSET ?", params
     ).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": limit, "offset": offset, "has_more": (offset + limit) < total})
@@ -108,7 +108,7 @@ def get_lab_test(conn, args):
     test_id = getattr(args, "lab_test_id", None)
     if not test_id:
         err("--lab-test-id is required")
-    row = conn.execute("SELECT * FROM hcadv_lab_test WHERE id = ?", (test_id,)).fetchone()
+    row = conn.execute("SELECT * FROM healthclaw_lab_test WHERE id = ?", (test_id,)).fetchone()
     if not row:
         err(f"Lab test {test_id} not found")
     ok(row_to_dict(row))
@@ -123,7 +123,7 @@ def add_lab_order(conn, args):
             err(f"--{req.replace('_', '-')} is required")
 
     # Validate lab test exists
-    if not conn.execute("SELECT id FROM hcadv_lab_test WHERE id = ?",
+    if not conn.execute("SELECT id FROM healthclaw_lab_test WHERE id = ?",
                         (args.lab_test_id,)).fetchone():
         err(f"Lab test {args.lab_test_id} not found")
 
@@ -135,7 +135,7 @@ def add_lab_order(conn, args):
     order_id = str(uuid.uuid4())
     now = _now_iso()
     conn.execute(
-        """INSERT INTO hcadv_lab_order
+        """INSERT INTO healthclaw_lab_order
            (id, company_id, patient_id, ordering_provider, lab_test_id,
             order_date, priority, order_status, clinical_notes,
             fasting_required, notes, created_at, updated_at)
@@ -146,7 +146,7 @@ def add_lab_order(conn, args):
          fasting_required,
          getattr(args, "notes", None), now, now)
     )
-    audit(conn, "hcadv_lab_order", order_id, "health-add-lab-order", args.company_id)
+    audit(conn, "healthclaw_lab_order", order_id, "health-add-lab-order", args.company_id)
     conn.commit()
     ok({"id": order_id, "lab_test_id": args.lab_test_id, "priority": priority,
         "order_status": "ordered"})
@@ -173,12 +173,12 @@ def list_lab_orders(conn, args):
         s = f"%{args.search}%"
         params.extend([s, s])
     where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM hcadv_lab_order WHERE {where_sql}", params).fetchone()[0]
+    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_lab_order WHERE {where_sql}", params).fetchone()[0]
     limit = getattr(args, "limit", None) or 50
     offset = getattr(args, "offset", None) or 0
     params.extend([limit, offset])
     rows = conn.execute(
-        f"SELECT * FROM hcadv_lab_order WHERE {where_sql} ORDER BY order_date DESC LIMIT ? OFFSET ?", params
+        f"SELECT * FROM healthclaw_lab_order WHERE {where_sql} ORDER BY order_date DESC LIMIT ? OFFSET ?", params
     ).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": limit, "offset": offset, "has_more": (offset + limit) < total})
@@ -191,7 +191,7 @@ def get_lab_order(conn, args):
     order_id = getattr(args, "lab_order_id", None)
     if not order_id:
         err("--lab-order-id is required")
-    row = conn.execute("SELECT * FROM hcadv_lab_order WHERE id = ?", (order_id,)).fetchone()
+    row = conn.execute("SELECT * FROM healthclaw_lab_order WHERE id = ?", (order_id,)).fetchone()
     if not row:
         err(f"Lab order {order_id} not found")
     ok(row_to_dict(row))
@@ -206,7 +206,7 @@ def add_lab_result(conn, args):
             err(f"--{req.replace('_', '-')} is required")
 
     # Validate lab order exists and get test info
-    order_row = conn.execute("SELECT * FROM hcadv_lab_order WHERE id = ?",
+    order_row = conn.execute("SELECT * FROM healthclaw_lab_order WHERE id = ?",
                              (args.lab_order_id,)).fetchone()
     if not order_row:
         err(f"Lab order {args.lab_order_id} not found")
@@ -218,7 +218,7 @@ def add_lab_result(conn, args):
     result_id = str(uuid.uuid4())
     now = _now_iso()
     conn.execute(
-        """INSERT INTO hcadv_lab_result
+        """INSERT INTO healthclaw_lab_result
            (id, company_id, lab_order_id, lab_test_id, patient_id,
             result_value, result_unit, reference_range,
             is_abnormal, is_critical, performed_by, verified_by,
@@ -238,11 +238,11 @@ def add_lab_result(conn, args):
 
     # Update order status to completed
     conn.execute(
-        "UPDATE hcadv_lab_order SET order_status = 'completed', completed_at = ?, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE healthclaw_lab_order SET order_status = 'completed', completed_at = ?, updated_at = datetime('now') WHERE id = ?",
         (now, args.lab_order_id)
     )
 
-    audit(conn, "hcadv_lab_result", result_id, "health-add-lab-result", args.company_id)
+    audit(conn, "healthclaw_lab_result", result_id, "health-add-lab-result", args.company_id)
     conn.commit()
     ok({"id": result_id, "lab_order_id": args.lab_order_id,
         "is_abnormal": is_abnormal, "is_critical": is_critical})
@@ -266,12 +266,12 @@ def list_lab_results(conn, args):
     if getattr(args, "is_critical", None):
         where.append("is_critical = 1")
     where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM hcadv_lab_result WHERE {where_sql}", params).fetchone()[0]
+    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_lab_result WHERE {where_sql}", params).fetchone()[0]
     limit = getattr(args, "limit", None) or 50
     offset = getattr(args, "offset", None) or 0
     params.extend([limit, offset])
     rows = conn.execute(
-        f"SELECT * FROM hcadv_lab_result WHERE {where_sql} ORDER BY result_date DESC LIMIT ? OFFSET ?", params
+        f"SELECT * FROM healthclaw_lab_result WHERE {where_sql} ORDER BY result_date DESC LIMIT ? OFFSET ?", params
     ).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": limit, "offset": offset, "has_more": (offset + limit) < total})
@@ -284,7 +284,7 @@ def get_lab_result(conn, args):
     result_id = getattr(args, "lab_result_id", None)
     if not result_id:
         err("--lab-result-id is required")
-    row = conn.execute("SELECT * FROM hcadv_lab_result WHERE id = ?", (result_id,)).fetchone()
+    row = conn.execute("SELECT * FROM healthclaw_lab_result WHERE id = ?", (result_id,)).fetchone()
     if not row:
         err(f"Lab result {result_id} not found")
     ok(row_to_dict(row))
@@ -298,15 +298,15 @@ def mark_lab_critical(conn, args):
     if not result_id:
         err("--lab-result-id is required")
 
-    row = conn.execute("SELECT * FROM hcadv_lab_result WHERE id = ?", (result_id,)).fetchone()
+    row = conn.execute("SELECT * FROM healthclaw_lab_result WHERE id = ?", (result_id,)).fetchone()
     if not row:
         err(f"Lab result {result_id} not found")
 
     conn.execute(
-        "UPDATE hcadv_lab_result SET is_critical = 1, is_abnormal = 1, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE healthclaw_lab_result SET is_critical = 1, is_abnormal = 1, updated_at = datetime('now') WHERE id = ?",
         (result_id,)
     )
-    audit(conn, "hcadv_lab_result", result_id, "health-mark-lab-critical",
+    audit(conn, "healthclaw_lab_result", result_id, "health-mark-lab-critical",
           getattr(args, "company_id", None) or row_to_dict(row).get("company_id"))
     conn.commit()
     ok({"id": result_id, "is_critical": 1, "is_abnormal": 1})
@@ -331,8 +331,8 @@ def lab_turnaround_report(conn, args):
     rows = conn.execute(
         f"""SELECT lo.*, lt.test_name, lt.turnaround_hours as expected_hours,
             ROUND((julianday(lo.completed_at) - julianday(lo.order_date)) * 24, 1) as actual_hours
-            FROM hcadv_lab_order lo
-            JOIN hcadv_lab_test lt ON lo.lab_test_id = lt.id
+            FROM healthclaw_lab_order lo
+            JOIN healthclaw_lab_test lt ON lo.lab_test_id = lt.id
             WHERE {where_sql}
             ORDER BY lo.order_date DESC""",
         params
@@ -390,8 +390,8 @@ def abnormal_results_report(conn, args):
 
     rows = conn.execute(
         f"""SELECT lr.*, lt.test_name, lt.category
-            FROM hcadv_lab_result lr
-            JOIN hcadv_lab_test lt ON lr.lab_test_id = lt.id
+            FROM healthclaw_lab_result lr
+            JOIN healthclaw_lab_test lt ON lr.lab_test_id = lt.id
             WHERE {where_sql}
             ORDER BY lr.is_critical DESC, lr.result_date DESC""",
         params

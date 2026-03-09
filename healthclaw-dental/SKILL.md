@@ -2,8 +2,8 @@
 name: healthclaw-dental
 version: 1.0.0
 description: Dental expansion for HealthClaw -- tooth charts, CDT-coded procedures, multi-phase treatment plans, and periodontal charting with trend comparison.
-author: AvanSaber / Nikhil Jathar
-homepage: https://www.healthclaw.ai
+author: AvanSaber
+homepage: https://github.com/avansaber/healthclaw
 source: https://github.com/avansaber/healthclaw
 tier: 4
 category: healthcare

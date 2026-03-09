@@ -42,7 +42,7 @@ def revenue_cycle_report(conn, args):
     charge_sql = " AND ".join(charge_where)
 
     charge_rows = conn.execute(
-        f"SELECT charge_status, COUNT(*) as cnt, COALESCE(SUM(CAST(total_fee AS REAL)), 0) as total FROM hcadv_charge WHERE {charge_sql} GROUP BY charge_status",
+        f"SELECT charge_status, COUNT(*) as cnt, COALESCE(SUM(CAST(total_fee AS REAL)), 0) as total FROM healthclaw_charge WHERE {charge_sql} GROUP BY charge_status",
         charge_params
     ).fetchall()
 
@@ -65,7 +65,7 @@ def revenue_cycle_report(conn, args):
     claim_sql = " AND ".join(claim_where)
 
     claim_rows = conn.execute(
-        f"SELECT claim_status, COUNT(*) as cnt, COALESCE(SUM(CAST(total_charged AS REAL)), 0) as charged, COALESCE(SUM(CAST(total_paid AS REAL)), 0) as paid FROM hcadv_claim WHERE {claim_sql} GROUP BY claim_status",
+        f"SELECT claim_status, COUNT(*) as cnt, COALESCE(SUM(CAST(total_charged AS REAL)), 0) as charged, COALESCE(SUM(CAST(total_paid AS REAL)), 0) as paid FROM healthclaw_claim WHERE {claim_sql} GROUP BY claim_status",
         claim_params
     ).fetchall()
 
@@ -112,7 +112,7 @@ def payer_mix_report(conn, args):
             COALESCE(SUM(CAST(total_charged AS REAL)), 0) as total_charged,
             COALESCE(SUM(CAST(total_paid AS REAL)), 0) as total_paid,
             COALESCE(SUM(CAST(total_adjustment AS REAL)), 0) as total_adjustment
-            FROM hcadv_claim WHERE {where_sql}
+            FROM healthclaw_claim WHERE {where_sql}
             GROUP BY payer_name ORDER BY total_charged DESC""",
         params
     ).fetchall()
@@ -156,7 +156,7 @@ def denial_rate_report(conn, args):
 
     # Total claims
     total_row = conn.execute(
-        f"SELECT COUNT(*) as total FROM hcadv_claim WHERE {where_sql}", params
+        f"SELECT COUNT(*) as total FROM healthclaw_claim WHERE {where_sql}", params
     ).fetchone()
     total_claims = total_row[0] if total_row else 0
 
@@ -165,7 +165,7 @@ def denial_rate_report(conn, args):
     denied_where = where + ["claim_status = 'denied'"]
     denied_sql = " AND ".join(denied_where)
     denied_row = conn.execute(
-        f"SELECT COUNT(*) as cnt, COALESCE(SUM(CAST(total_charged AS REAL)), 0) as total FROM hcadv_claim WHERE {denied_sql}",
+        f"SELECT COUNT(*) as cnt, COALESCE(SUM(CAST(total_charged AS REAL)), 0) as total FROM healthclaw_claim WHERE {denied_sql}",
         denied_params
     ).fetchone()
     denied_count = denied_row[0] if denied_row else 0
@@ -176,7 +176,7 @@ def denial_rate_report(conn, args):
     # Denial reasons breakdown
     reason_rows = conn.execute(
         f"""SELECT COALESCE(denial_reason, 'Not specified') as reason, COUNT(*) as cnt
-            FROM hcadv_claim WHERE {denied_sql}
+            FROM healthclaw_claim WHERE {denied_sql}
             GROUP BY denial_reason ORDER BY cnt DESC""",
         denied_params
     ).fetchall()
@@ -186,7 +186,7 @@ def denial_rate_report(conn, args):
     # Denied by payer
     payer_rows = conn.execute(
         f"""SELECT payer_name, COUNT(*) as cnt
-            FROM hcadv_claim WHERE {denied_sql}
+            FROM healthclaw_claim WHERE {denied_sql}
             GROUP BY payer_name ORDER BY cnt DESC""",
         denied_params
     ).fetchall()

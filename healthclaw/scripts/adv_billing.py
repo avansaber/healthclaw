@@ -18,8 +18,8 @@ try:
 except ImportError:
     pass
 
-ENTITY_PREFIXES.setdefault("hcadv_charge", "CHG-")
-ENTITY_PREFIXES.setdefault("hcadv_claim", "CLM-")
+ENTITY_PREFIXES.setdefault("healthclaw_charge", "CHG-")
+ENTITY_PREFIXES.setdefault("healthclaw_claim", "CLM-")
 
 # ---- Constants ---------------------------------------------------------------
 
@@ -59,7 +59,7 @@ def add_procedure_code(conn, args):
     pc_id = str(uuid.uuid4())
     now = _now_iso()
     conn.execute(
-        """INSERT INTO hcadv_procedure_code
+        """INSERT INTO healthclaw_procedure_code
            (id, company_id, code, code_type, description, category,
             default_fee, is_active, notes, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)""",
@@ -67,7 +67,7 @@ def add_procedure_code(conn, args):
          getattr(args, "category", None), default_fee,
          getattr(args, "notes", None), now, now)
     )
-    audit(conn, "hcadv_procedure_code", pc_id, "health-add-procedure-code", args.company_id)
+    audit(conn, "healthclaw_procedure_code", pc_id, "health-add-procedure-code", args.company_id)
     conn.commit()
     ok({"id": pc_id, "code": args.code, "code_type": code_type, "default_fee": default_fee})
 
@@ -88,12 +88,12 @@ def list_procedure_codes(conn, args):
         s = f"%{args.search}%"
         params.extend([s, s])
     where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM hcadv_procedure_code WHERE {where_sql}", params).fetchone()[0]
+    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_procedure_code WHERE {where_sql}", params).fetchone()[0]
     limit = getattr(args, "limit", None) or 50
     offset = getattr(args, "offset", None) or 0
     params.extend([limit, offset])
     rows = conn.execute(
-        f"SELECT * FROM hcadv_procedure_code WHERE {where_sql} ORDER BY code ASC LIMIT ? OFFSET ?", params
+        f"SELECT * FROM healthclaw_procedure_code WHERE {where_sql} ORDER BY code ASC LIMIT ? OFFSET ?", params
     ).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": limit, "offset": offset, "has_more": (offset + limit) < total})
@@ -110,7 +110,7 @@ def add_charge(conn, args):
     # Validate procedure_code_id if provided
     procedure_code_id = getattr(args, "procedure_code_id", None)
     if procedure_code_id:
-        if not conn.execute("SELECT id FROM hcadv_procedure_code WHERE id = ?",
+        if not conn.execute("SELECT id FROM healthclaw_procedure_code WHERE id = ?",
                             (procedure_code_id,)).fetchone():
             err(f"Procedure code {procedure_code_id} not found")
 
@@ -127,7 +127,7 @@ def add_charge(conn, args):
     charge_id = str(uuid.uuid4())
     now = _now_iso()
     conn.execute(
-        """INSERT INTO hcadv_charge
+        """INSERT INTO healthclaw_charge
            (id, company_id, patient_id, provider_id, procedure_code_id,
             service_date, cpt_code, icd10_codes, description, quantity,
             unit_fee, total_fee, charge_status, notes, created_at, updated_at)
@@ -138,7 +138,7 @@ def add_charge(conn, args):
          getattr(args, "description", None), quantity, unit_fee, total_fee,
          getattr(args, "notes", None), now, now)
     )
-    audit(conn, "hcadv_charge", charge_id, "health-add-charge", args.company_id)
+    audit(conn, "healthclaw_charge", charge_id, "health-add-charge", args.company_id)
     conn.commit()
     ok({"id": charge_id, "total_fee": total_fee, "charge_status": "unbilled"})
 
@@ -160,12 +160,12 @@ def list_charges(conn, args):
         s = f"%{args.search}%"
         params.extend([s, s, s])
     where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM hcadv_charge WHERE {where_sql}", params).fetchone()[0]
+    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_charge WHERE {where_sql}", params).fetchone()[0]
     limit = getattr(args, "limit", None) or 50
     offset = getattr(args, "offset", None) or 0
     params.extend([limit, offset])
     rows = conn.execute(
-        f"SELECT * FROM hcadv_charge WHERE {where_sql} ORDER BY service_date DESC LIMIT ? OFFSET ?", params
+        f"SELECT * FROM healthclaw_charge WHERE {where_sql} ORDER BY service_date DESC LIMIT ? OFFSET ?", params
     ).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": limit, "offset": offset, "has_more": (offset + limit) < total})
@@ -178,7 +178,7 @@ def get_charge(conn, args):
     charge_id = getattr(args, "charge_id", None)
     if not charge_id:
         err("--charge-id is required")
-    row = conn.execute("SELECT * FROM hcadv_charge WHERE id = ?", (charge_id,)).fetchone()
+    row = conn.execute("SELECT * FROM healthclaw_charge WHERE id = ?", (charge_id,)).fetchone()
     if not row:
         err(f"Charge {charge_id} not found")
     data = row_to_dict(row)
@@ -209,14 +209,14 @@ def add_claim(conn, args):
     # Calculate total_charged from charges
     total_charged = Decimal("0.00")
     for cid in parsed_ids:
-        row = conn.execute("SELECT total_fee FROM hcadv_charge WHERE id = ?", (cid,)).fetchone()
+        row = conn.execute("SELECT total_fee FROM healthclaw_charge WHERE id = ?", (cid,)).fetchone()
         if row:
             total_charged += to_decimal(row[0])
 
     claim_id = str(uuid.uuid4())
     now = _now_iso()
     conn.execute(
-        """INSERT INTO hcadv_claim
+        """INSERT INTO healthclaw_claim
            (id, company_id, patient_id, payer_name, payer_id_number,
             policy_number, group_number, claim_number, charge_ids,
             total_charged, total_allowed, total_paid, total_adjustment,
@@ -232,7 +232,7 @@ def add_claim(conn, args):
          str(round_currency(total_charged)),
          getattr(args, "notes", None), now, now)
     )
-    audit(conn, "hcadv_claim", claim_id, "health-add-claim", args.company_id)
+    audit(conn, "healthclaw_claim", claim_id, "health-add-claim", args.company_id)
     conn.commit()
     ok({"id": claim_id, "total_charged": str(round_currency(total_charged)),
         "claim_status": "draft"})
@@ -257,12 +257,12 @@ def list_claims(conn, args):
         s = f"%{args.search}%"
         params.extend([s, s, s])
     where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM hcadv_claim WHERE {where_sql}", params).fetchone()[0]
+    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_claim WHERE {where_sql}", params).fetchone()[0]
     limit = getattr(args, "limit", None) or 50
     offset = getattr(args, "offset", None) or 0
     params.extend([limit, offset])
     rows = conn.execute(
-        f"SELECT * FROM hcadv_claim WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?", params
+        f"SELECT * FROM healthclaw_claim WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?", params
     ).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": limit, "offset": offset, "has_more": (offset + limit) < total})
@@ -275,7 +275,7 @@ def get_claim(conn, args):
     claim_id = getattr(args, "claim_id", None)
     if not claim_id:
         err("--claim-id is required")
-    row = conn.execute("SELECT * FROM hcadv_claim WHERE id = ?", (claim_id,)).fetchone()
+    row = conn.execute("SELECT * FROM healthclaw_claim WHERE id = ?", (claim_id,)).fetchone()
     if not row:
         err(f"Claim {claim_id} not found")
     data = row_to_dict(row)
@@ -296,7 +296,7 @@ def submit_claim(conn, args):
     if not claim_id:
         err("--claim-id is required")
 
-    row = conn.execute("SELECT * FROM hcadv_claim WHERE id = ?", (claim_id,)).fetchone()
+    row = conn.execute("SELECT * FROM healthclaw_claim WHERE id = ?", (claim_id,)).fetchone()
     if not row:
         err(f"Claim {claim_id} not found")
     claim = row_to_dict(row)
@@ -306,7 +306,7 @@ def submit_claim(conn, args):
 
     now = _now_iso()
     conn.execute(
-        "UPDATE hcadv_claim SET claim_status = 'submitted', submitted_date = ?, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE healthclaw_claim SET claim_status = 'submitted', submitted_date = ?, updated_at = datetime('now') WHERE id = ?",
         (now, claim_id)
     )
 
@@ -318,11 +318,11 @@ def submit_claim(conn, args):
         charge_ids = []
     for cid in charge_ids:
         conn.execute(
-            "UPDATE hcadv_charge SET charge_status = 'billed', updated_at = datetime('now') WHERE id = ?",
+            "UPDATE healthclaw_charge SET charge_status = 'billed', updated_at = datetime('now') WHERE id = ?",
             (cid,)
         )
 
-    audit(conn, "hcadv_claim", claim_id, "health-submit-claim", claim["company_id"])
+    audit(conn, "healthclaw_claim", claim_id, "health-submit-claim", claim["company_id"])
     conn.commit()
     ok({"id": claim_id, "claim_status": "submitted", "submitted_date": now,
         "charges_billed": len(charge_ids)})
@@ -337,14 +337,14 @@ def add_payment_posting(conn, args):
             err(f"--{req.replace('_', '-')} is required")
 
     # Validate claim
-    if not conn.execute("SELECT id FROM hcadv_claim WHERE id = ?",
+    if not conn.execute("SELECT id FROM healthclaw_claim WHERE id = ?",
                         (args.claim_id,)).fetchone():
         err(f"Claim {args.claim_id} not found")
 
     # Validate charge_id if provided
     charge_id = getattr(args, "charge_id", None)
     if charge_id:
-        if not conn.execute("SELECT id FROM hcadv_charge WHERE id = ?",
+        if not conn.execute("SELECT id FROM healthclaw_charge WHERE id = ?",
                             (charge_id,)).fetchone():
             err(f"Charge {charge_id} not found")
 
@@ -357,7 +357,7 @@ def add_payment_posting(conn, args):
     pp_id = str(uuid.uuid4())
     now = _now_iso()
     conn.execute(
-        """INSERT INTO hcadv_payment_posting
+        """INSERT INTO healthclaw_payment_posting
            (id, company_id, claim_id, charge_id, patient_id, payer_name,
             posting_date, allowed_amount, paid_amount, adjustment,
             patient_responsibility, payment_method, check_number, notes, created_at)
@@ -372,7 +372,7 @@ def add_payment_posting(conn, args):
 
     # Update claim totals
     conn.execute(
-        """UPDATE hcadv_claim SET
+        """UPDATE healthclaw_claim SET
            total_allowed = CAST((CAST(total_allowed AS REAL) + CAST(? AS REAL)) AS TEXT),
            total_paid = CAST((CAST(total_paid AS REAL) + CAST(? AS REAL)) AS TEXT),
            total_adjustment = CAST((CAST(total_adjustment AS REAL) + CAST(? AS REAL)) AS TEXT),
@@ -382,7 +382,7 @@ def add_payment_posting(conn, args):
         (allowed_amount, paid_amount, adjustment, patient_responsibility, args.claim_id)
     )
 
-    audit(conn, "hcadv_payment_posting", pp_id, "health-add-payment-posting", args.company_id)
+    audit(conn, "healthclaw_payment_posting", pp_id, "health-add-payment-posting", args.company_id)
     conn.commit()
     ok({"id": pp_id, "paid_amount": paid_amount, "adjustment": adjustment})
 
@@ -401,12 +401,12 @@ def list_payment_postings(conn, args):
     if getattr(args, "payer_name", None):
         where.append("payer_name = ?"); params.append(args.payer_name)
     where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM hcadv_payment_posting WHERE {where_sql}", params).fetchone()[0]
+    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_payment_posting WHERE {where_sql}", params).fetchone()[0]
     limit = getattr(args, "limit", None) or 50
     offset = getattr(args, "offset", None) or 0
     params.extend([limit, offset])
     rows = conn.execute(
-        f"SELECT * FROM hcadv_payment_posting WHERE {where_sql} ORDER BY posting_date DESC LIMIT ? OFFSET ?", params
+        f"SELECT * FROM healthclaw_payment_posting WHERE {where_sql} ORDER BY posting_date DESC LIMIT ? OFFSET ?", params
     ).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": limit, "offset": offset, "has_more": (offset + limit) < total})
@@ -425,7 +425,7 @@ def aging_report(conn, args):
     rows = conn.execute(
         f"""SELECT *,
             CAST(julianday('now') - julianday(service_date) AS INTEGER) as days_outstanding
-            FROM hcadv_charge
+            FROM healthclaw_charge
             WHERE {where_sql}
             ORDER BY service_date ASC""",
         params

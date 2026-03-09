@@ -18,8 +18,8 @@ try:
 except ImportError:
     pass
 
-ENTITY_PREFIXES.setdefault("hcadv_prescription", "RX-")
-ENTITY_PREFIXES.setdefault("hcadv_dispense_log", "DISP-")
+ENTITY_PREFIXES.setdefault("healthclaw_prescription", "RX-")
+ENTITY_PREFIXES.setdefault("healthclaw_dispense_log", "DISP-")
 
 # ---- Constants ---------------------------------------------------------------
 
@@ -69,7 +69,7 @@ def add_medication(conn, args):
     med_id = str(uuid.uuid4())
     now = _now_iso()
     conn.execute(
-        """INSERT INTO hcadv_medication
+        """INSERT INTO healthclaw_medication
            (id, company_id, name, generic_name, ndc_code, dea_schedule, dosage_form,
             strength, manufacturer, unit_price, quantity_on_hand, reorder_level,
             is_active, notes, created_at, updated_at)
@@ -84,7 +84,7 @@ def add_medication(conn, args):
          unit_price, quantity_on_hand, reorder_level,
          getattr(args, "notes", None), now, now)
     )
-    audit(conn, "hcadv_medication", med_id, "health-add-medication", args.company_id)
+    audit(conn, "healthclaw_medication", med_id, "health-add-medication", args.company_id)
     conn.commit()
     ok({"id": med_id, "name": args.name, "dea_schedule": dea_schedule, "unit_price": unit_price})
 
@@ -103,12 +103,12 @@ def list_medications(conn, args):
         s = f"%{args.search}%"
         params.extend([s, s, s])
     where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM hcadv_medication WHERE {where_sql}", params).fetchone()[0]
+    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_medication WHERE {where_sql}", params).fetchone()[0]
     limit = getattr(args, "limit", None) or 50
     offset = getattr(args, "offset", None) or 0
     params.extend([limit, offset])
     rows = conn.execute(
-        f"SELECT * FROM hcadv_medication WHERE {where_sql} ORDER BY name ASC LIMIT ? OFFSET ?", params
+        f"SELECT * FROM healthclaw_medication WHERE {where_sql} ORDER BY name ASC LIMIT ? OFFSET ?", params
     ).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": limit, "offset": offset, "has_more": (offset + limit) < total})
@@ -121,7 +121,7 @@ def get_medication(conn, args):
     med_id = getattr(args, "medication_id", None)
     if not med_id:
         err("--medication-id is required")
-    row = conn.execute("SELECT * FROM hcadv_medication WHERE id = ?", (med_id,)).fetchone()
+    row = conn.execute("SELECT * FROM healthclaw_medication WHERE id = ?", (med_id,)).fetchone()
     if not row:
         err(f"Medication {med_id} not found")
     ok(row_to_dict(row))
@@ -134,7 +134,7 @@ def update_medication(conn, args):
     med_id = getattr(args, "medication_id", None)
     if not med_id:
         err("--medication-id is required")
-    if not conn.execute("SELECT id FROM hcadv_medication WHERE id = ?", (med_id,)).fetchone():
+    if not conn.execute("SELECT id FROM healthclaw_medication WHERE id = ?", (med_id,)).fetchone():
         err(f"Medication {med_id} not found")
 
     updates, params, changed = [], [], []
@@ -170,8 +170,8 @@ def update_medication(conn, args):
         err("No fields to update")
     updates.append("updated_at = datetime('now')")
     params.append(med_id)
-    conn.execute(f"UPDATE hcadv_medication SET {', '.join(updates)} WHERE id = ?", params)
-    audit(conn, "hcadv_medication", med_id, "health-update-medication", getattr(args, "company_id", None))
+    conn.execute(f"UPDATE healthclaw_medication SET {', '.join(updates)} WHERE id = ?", params)
+    audit(conn, "healthclaw_medication", med_id, "health-update-medication", getattr(args, "company_id", None))
     conn.commit()
     ok({"id": med_id, "updated_fields": changed})
 
@@ -185,7 +185,7 @@ def add_prescription(conn, args):
             err(f"--{req.replace('_', '-')} is required")
 
     # Validate medication exists
-    med_row = conn.execute("SELECT id, dea_schedule FROM hcadv_medication WHERE id = ?",
+    med_row = conn.execute("SELECT id, dea_schedule FROM healthclaw_medication WHERE id = ?",
                            (args.medication_id,)).fetchone()
     if not med_row:
         err(f"Medication {args.medication_id} not found")
@@ -210,7 +210,7 @@ def add_prescription(conn, args):
     rx_number = getattr(args, "rx_number", None)
     now = _now_iso()
     conn.execute(
-        """INSERT INTO hcadv_prescription
+        """INSERT INTO healthclaw_prescription
            (id, company_id, patient_id, prescriber_id, medication_id, rx_number,
             dosage, frequency, route, quantity_prescribed, refills_authorized,
             refills_used, dea_number, rx_status, prescribed_date, expiry_date,
@@ -222,7 +222,7 @@ def add_prescription(conn, args):
          args.prescribed_date, getattr(args, "expiry_date", None),
          getattr(args, "notes", None), now, now)
     )
-    audit(conn, "hcadv_prescription", rx_id, "health-add-prescription", args.company_id)
+    audit(conn, "healthclaw_prescription", rx_id, "health-add-prescription", args.company_id)
     conn.commit()
     ok({"id": rx_id, "rx_number": rx_number, "medication_id": args.medication_id,
         "rx_status": "active"})
@@ -247,12 +247,12 @@ def list_prescriptions(conn, args):
         s = f"%{args.search}%"
         params.extend([s, s, s])
     where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM hcadv_prescription WHERE {where_sql}", params).fetchone()[0]
+    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_prescription WHERE {where_sql}", params).fetchone()[0]
     limit = getattr(args, "limit", None) or 50
     offset = getattr(args, "offset", None) or 0
     params.extend([limit, offset])
     rows = conn.execute(
-        f"SELECT * FROM hcadv_prescription WHERE {where_sql} ORDER BY prescribed_date DESC LIMIT ? OFFSET ?", params
+        f"SELECT * FROM healthclaw_prescription WHERE {where_sql} ORDER BY prescribed_date DESC LIMIT ? OFFSET ?", params
     ).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": limit, "offset": offset, "has_more": (offset + limit) < total})
@@ -265,7 +265,7 @@ def get_prescription(conn, args):
     rx_id = getattr(args, "prescription_id", None)
     if not rx_id:
         err("--prescription-id is required")
-    row = conn.execute("SELECT * FROM hcadv_prescription WHERE id = ?", (rx_id,)).fetchone()
+    row = conn.execute("SELECT * FROM healthclaw_prescription WHERE id = ?", (rx_id,)).fetchone()
     if not row:
         err(f"Prescription {rx_id} not found")
     ok(row_to_dict(row))
@@ -281,7 +281,7 @@ def fill_prescription(conn, args):
     if not getattr(args, "dispensed_by", None):
         err("--dispensed-by is required")
 
-    row = conn.execute("SELECT * FROM hcadv_prescription WHERE id = ?", (rx_id,)).fetchone()
+    row = conn.execute("SELECT * FROM healthclaw_prescription WHERE id = ?", (rx_id,)).fetchone()
     if not row:
         err(f"Prescription {rx_id} not found")
     rx = row_to_dict(row)
@@ -295,7 +295,7 @@ def fill_prescription(conn, args):
     disp_id = str(uuid.uuid4())
     now = _now_iso()
     conn.execute(
-        """INSERT INTO hcadv_dispense_log
+        """INSERT INTO healthclaw_dispense_log
            (id, company_id, prescription_id, medication_id, dispensed_by,
             quantity_dispensed, dispense_date, is_refill, lot_number,
             expiration_date, notes, created_at)
@@ -309,23 +309,23 @@ def fill_prescription(conn, args):
 
     # Update medication inventory
     conn.execute(
-        "UPDATE hcadv_medication SET quantity_on_hand = quantity_on_hand - ? WHERE id = ?",
+        "UPDATE healthclaw_medication SET quantity_on_hand = quantity_on_hand - ? WHERE id = ?",
         (quantity, rx["medication_id"])
     )
 
     # Update prescription status
     conn.execute(
-        "UPDATE hcadv_prescription SET rx_status = 'filled', updated_at = datetime('now') WHERE id = ?",
+        "UPDATE healthclaw_prescription SET rx_status = 'filled', updated_at = datetime('now') WHERE id = ?",
         (rx_id,)
     )
 
     # If controlled substance, log it
-    med_row = conn.execute("SELECT dea_schedule FROM hcadv_medication WHERE id = ?",
+    med_row = conn.execute("SELECT dea_schedule FROM healthclaw_medication WHERE id = ?",
                            (rx["medication_id"],)).fetchone()
     if med_row and med_row[0] != "non-scheduled":
         cs_log_id = str(uuid.uuid4())
         conn.execute(
-            """INSERT INTO hcadv_controlled_substance_log
+            """INSERT INTO healthclaw_controlled_substance_log
                (id, company_id, medication_id, prescription_id, action_type,
                 quantity, dea_number, performed_by, witness, log_date, notes, created_at)
                VALUES (?, ?, ?, ?, 'dispensed', ?, ?, ?, ?, ?, ?, ?)""",
@@ -335,7 +335,7 @@ def fill_prescription(conn, args):
              getattr(args, "notes", None), now)
         )
 
-    audit(conn, "hcadv_prescription", rx_id, "health-fill-prescription", rx["company_id"])
+    audit(conn, "healthclaw_prescription", rx_id, "health-fill-prescription", rx["company_id"])
     conn.commit()
     ok({"id": rx_id, "dispense_log_id": disp_id, "quantity_dispensed": quantity,
         "rx_status": "filled"})
@@ -351,7 +351,7 @@ def refill_prescription(conn, args):
     if not getattr(args, "dispensed_by", None):
         err("--dispensed-by is required")
 
-    row = conn.execute("SELECT * FROM hcadv_prescription WHERE id = ?", (rx_id,)).fetchone()
+    row = conn.execute("SELECT * FROM healthclaw_prescription WHERE id = ?", (rx_id,)).fetchone()
     if not row:
         err(f"Prescription {rx_id} not found")
     rx = row_to_dict(row)
@@ -367,7 +367,7 @@ def refill_prescription(conn, args):
     disp_id = str(uuid.uuid4())
     now = _now_iso()
     conn.execute(
-        """INSERT INTO hcadv_dispense_log
+        """INSERT INTO healthclaw_dispense_log
            (id, company_id, prescription_id, medication_id, dispensed_by,
             quantity_dispensed, dispense_date, is_refill, lot_number,
             expiration_date, notes, created_at)
@@ -381,7 +381,7 @@ def refill_prescription(conn, args):
 
     # Update medication inventory
     conn.execute(
-        "UPDATE hcadv_medication SET quantity_on_hand = quantity_on_hand - ? WHERE id = ?",
+        "UPDATE healthclaw_medication SET quantity_on_hand = quantity_on_hand - ? WHERE id = ?",
         (quantity, rx["medication_id"])
     )
 
@@ -389,17 +389,17 @@ def refill_prescription(conn, args):
     new_refills = rx["refills_used"] + 1
     new_status = "filled" if new_refills >= rx["refills_authorized"] else "active"
     conn.execute(
-        "UPDATE hcadv_prescription SET refills_used = ?, rx_status = ?, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE healthclaw_prescription SET refills_used = ?, rx_status = ?, updated_at = datetime('now') WHERE id = ?",
         (new_refills, new_status, rx_id)
     )
 
     # Controlled substance log
-    med_row = conn.execute("SELECT dea_schedule FROM hcadv_medication WHERE id = ?",
+    med_row = conn.execute("SELECT dea_schedule FROM healthclaw_medication WHERE id = ?",
                            (rx["medication_id"],)).fetchone()
     if med_row and med_row[0] != "non-scheduled":
         cs_log_id = str(uuid.uuid4())
         conn.execute(
-            """INSERT INTO hcadv_controlled_substance_log
+            """INSERT INTO healthclaw_controlled_substance_log
                (id, company_id, medication_id, prescription_id, action_type,
                 quantity, dea_number, performed_by, witness, log_date, notes, created_at)
                VALUES (?, ?, ?, ?, 'dispensed', ?, ?, ?, ?, ?, ?, ?)""",
@@ -409,7 +409,7 @@ def refill_prescription(conn, args):
              getattr(args, "notes", None), now)
         )
 
-    audit(conn, "hcadv_prescription", rx_id, "health-refill-prescription", rx["company_id"])
+    audit(conn, "healthclaw_prescription", rx_id, "health-refill-prescription", rx["company_id"])
     conn.commit()
     ok({"id": rx_id, "dispense_log_id": disp_id, "refill_number": new_refills,
         "refills_remaining": rx["refills_authorized"] - new_refills,
@@ -424,7 +424,7 @@ def add_dispense_log(conn, args):
         if not getattr(args, req, None):
             err(f"--{req.replace('_', '-')} is required")
 
-    rx_row = conn.execute("SELECT * FROM hcadv_prescription WHERE id = ?",
+    rx_row = conn.execute("SELECT * FROM healthclaw_prescription WHERE id = ?",
                           (args.prescription_id,)).fetchone()
     if not rx_row:
         err(f"Prescription {args.prescription_id} not found")
@@ -437,7 +437,7 @@ def add_dispense_log(conn, args):
     disp_id = str(uuid.uuid4())
     now = _now_iso()
     conn.execute(
-        """INSERT INTO hcadv_dispense_log
+        """INSERT INTO healthclaw_dispense_log
            (id, company_id, prescription_id, medication_id, dispensed_by,
             quantity_dispensed, dispense_date, is_refill, lot_number,
             expiration_date, notes, created_at)
@@ -449,7 +449,7 @@ def add_dispense_log(conn, args):
          getattr(args, "expiration_date", None),
          getattr(args, "notes", None), now)
     )
-    audit(conn, "hcadv_dispense_log", disp_id, "health-add-dispense-log", args.company_id)
+    audit(conn, "healthclaw_dispense_log", disp_id, "health-add-dispense-log", args.company_id)
     conn.commit()
     ok({"id": disp_id, "prescription_id": args.prescription_id, "quantity_dispensed": quantity})
 
@@ -466,12 +466,12 @@ def list_dispense_logs(conn, args):
     if getattr(args, "medication_id", None):
         where.append("medication_id = ?"); params.append(args.medication_id)
     where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM hcadv_dispense_log WHERE {where_sql}", params).fetchone()[0]
+    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_dispense_log WHERE {where_sql}", params).fetchone()[0]
     limit = getattr(args, "limit", None) or 50
     offset = getattr(args, "offset", None) or 0
     params.extend([limit, offset])
     rows = conn.execute(
-        f"SELECT * FROM hcadv_dispense_log WHERE {where_sql} ORDER BY dispense_date DESC LIMIT ? OFFSET ?", params
+        f"SELECT * FROM healthclaw_dispense_log WHERE {where_sql} ORDER BY dispense_date DESC LIMIT ? OFFSET ?", params
     ).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": limit, "offset": offset, "has_more": (offset + limit) < total})
@@ -484,15 +484,15 @@ def check_drug_interaction(conn, args):
     med_id = getattr(args, "medication_id", None)
     if not med_id:
         err("--medication-id is required")
-    if not conn.execute("SELECT id FROM hcadv_medication WHERE id = ?", (med_id,)).fetchone():
+    if not conn.execute("SELECT id FROM healthclaw_medication WHERE id = ?", (med_id,)).fetchone():
         err(f"Medication {med_id} not found")
 
     # Check interactions where this medication is either A or B
     rows = conn.execute(
         """SELECT di.*, ma.name as med_a_name, mb.name as med_b_name
-           FROM hcadv_drug_interaction di
-           JOIN hcadv_medication ma ON di.medication_a_id = ma.id
-           JOIN hcadv_medication mb ON di.medication_b_id = mb.id
+           FROM healthclaw_drug_interaction di
+           JOIN healthclaw_medication ma ON di.medication_a_id = ma.id
+           JOIN healthclaw_medication mb ON di.medication_b_id = mb.id
            WHERE di.medication_a_id = ? OR di.medication_b_id = ?
            ORDER BY CASE di.severity
                WHEN 'contraindicated' THEN 1 WHEN 'major' THEN 2
@@ -526,7 +526,7 @@ def medication_inventory_report(conn, args):
     where_sql = " AND ".join(where)
 
     rows = conn.execute(
-        f"SELECT * FROM hcadv_medication WHERE {where_sql} ORDER BY name ASC", params
+        f"SELECT * FROM healthclaw_medication WHERE {where_sql} ORDER BY name ASC", params
     ).fetchall()
 
     total_value = Decimal("0.00")
@@ -578,8 +578,8 @@ def controlled_substance_report(conn, args):
 
     rows = conn.execute(
         f"""SELECT csl.*, m.name as medication_name, m.dea_schedule
-            FROM hcadv_controlled_substance_log csl
-            JOIN hcadv_medication m ON csl.medication_id = m.id
+            FROM healthclaw_controlled_substance_log csl
+            JOIN healthclaw_medication m ON csl.medication_id = m.id
             WHERE {where_sql}
             ORDER BY csl.log_date DESC""",
         params

@@ -1,0 +1,85 @@
+ocui_version: "1.0"
+skill: healthclaw-homehealth
+skill_version: "1.0.0"
+display_name: Home Health
+icon: home
+color: "#059669"
+default_entity: home_visit
+
+domains:
+  - key: visits
+    label: Home Visits
+    entities: [home_visit]
+  - key: care_plans
+    label: Care Plans
+    entities: [care_plan]
+  - key: oasis
+    label: OASIS Assessments
+    entities: [oasis_assessment]
+  - key: aides
+    label: Aide Assignments
+    entities: [aide_assignment]
+
+dashboard:
+  kpis:
+    - key: scheduled_visits
+      label: "Scheduled Visits"
+      type: count
+      action: homehealth-list-home-visits
+      filter: { visit-status: scheduled }
+      severity: info
+      icon: calendar
+      drill_action: homehealth-list-home-visits
+      drill_filter: { visit-status: scheduled }
+    - key: active_care_plans
+      label: "Active Care Plans"
+      type: count
+      action: homehealth-list-care-plans
+      filter: { plan-status: active }
+      severity: success
+      icon: clipboard-list
+      drill_action: homehealth-list-care-plans
+      drill_filter: { plan-status: active }
+    - key: active_aide_assignments
+      label: "Active Aides"
+      type: count
+      action: homehealth-list-aide-assignments
+      filter: { status: active }
+      severity: success
+      icon: user-check
+      drill_action: homehealth-list-aide-assignments
+      drill_filter: { status: active }
+    - key: pending_assessments
+      label: "OASIS Assessments"
+      type: count
+      action: homehealth-list-oasis-assessments
+      icon: file-text
+      drill_action: homehealth-list-oasis-assessments
+  quick_actions:
+    - action: homehealth-add-home-visit
+      label: "New Home Visit"
+      icon: home
+    - action: homehealth-add-care-plan
+      label: "New Care Plan"
+      icon: clipboard-list
+    - action: homehealth-add-oasis-assessment
+      label: "OASIS Assessment"
+      icon: file-text
+    - action: homehealth-add-aide-assignment
+      label: "Assign Aide"
+      icon: user-check
+
+workflows:
+  - after: homehealth-add-care-plan
+    suggest:
+      - action: homehealth-add-home-visit
+        label: "Schedule home visit"
+        pass: { patient-id: patient_id }
+      - action: homehealth-add-aide-assignment
+        label: "Assign aide"
+        pass: { patient-id: patient_id }
+  - after: homehealth-add-home-visit
+    suggest:
+      - action: homehealth-add-oasis-assessment
+        label: "Complete OASIS assessment"
+        pass: { patient-id: patient_id }

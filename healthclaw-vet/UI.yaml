@@ -1,0 +1,83 @@
+ocui_version: "1.0"
+skill: healthclaw-vet
+skill_version: "1.0.0"
+display_name: Veterinary Practice
+icon: paw-print
+color: "#ca8a04"
+default_entity: animal_patient
+
+domains:
+  - key: animals
+    label: Animal Patients
+    entities: [animal_patient]
+  - key: boarding
+    label: Boarding
+    entities: [boarding]
+  - key: dosing
+    label: Weight-Based Dosing
+    entities: [weight_dosing]
+  - key: owners
+    label: Owner Links
+    entities: [owner_link]
+
+dashboard:
+  kpis:
+    - key: total_animals
+      label: "Animal Patients"
+      type: count
+      action: vet-list-animal-patients
+      icon: paw-print
+      drill_action: vet-list-animal-patients
+    - key: active_boardings
+      label: "Active Boardings"
+      type: count
+      action: vet-list-boardings
+      filter: { status: checked_in }
+      severity: info
+      icon: home
+      drill_action: vet-list-boardings
+      drill_filter: { status: checked_in }
+    - key: canine_patients
+      label: "Canine"
+      type: count
+      action: vet-list-animal-patients
+      filter: { species: canine }
+      icon: dog
+      drill_action: vet-list-animal-patients
+      drill_filter: { species: canine }
+    - key: feline_patients
+      label: "Feline"
+      type: count
+      action: vet-list-animal-patients
+      filter: { species: feline }
+      icon: cat
+      drill_action: vet-list-animal-patients
+      drill_filter: { species: feline }
+  quick_actions:
+    - action: vet-add-animal-patient
+      label: "New Animal Patient"
+      icon: paw-print
+    - action: vet-add-boarding
+      label: "New Boarding"
+      icon: home
+    - action: vet-calculate-dose
+      label: "Calculate Dose"
+      icon: pill
+    - action: vet-add-owner-link
+      label: "Link Owner"
+      icon: link
+
+workflows:
+  - after: vet-add-animal-patient
+    suggest:
+      - action: vet-add-owner-link
+        label: "Link owner"
+        pass: { animal-patient-id: id }
+      - action: vet-add-boarding
+        label: "Schedule boarding"
+        pass: { animal-patient-id: id }
+  - after: vet-add-boarding
+    suggest:
+      - action: vet-calculate-dose
+        label: "Calculate medication dose"
+        pass: { animal-patient-id: animal_patient_id }
