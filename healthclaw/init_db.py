@@ -64,7 +64,8 @@ def create_healthclaw_tables(db_path):
             full_name       TEXT NOT NULL,
             date_of_birth   TEXT NOT NULL,
             gender          TEXT NOT NULL CHECK(gender IN ('male','female','other','unknown')),
-            ssn             TEXT,                -- encrypted, last-4 for display
+            ssn             TEXT,                -- encrypted at-rest via erpclaw_lib.crypto
+            ssn_last4       TEXT,                -- last 4 digits (unencrypted, for display)
             mrn             TEXT,                -- medical record number (auto from naming_series)
             marital_status  TEXT CHECK(marital_status IN ('single','married','divorced','widowed','separated','unknown')),
             race            TEXT,

@@ -18,12 +18,52 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.crypto import encrypt_field as _enc_raw, decrypt_field as _dec_raw, derive_key
 
     # Register HealthClaw naming prefixes (patients domain)
     ENTITY_PREFIXES.setdefault("healthclaw_patient", "PAT-")
     ENTITY_PREFIXES.setdefault("healthclaw_patient_insurance", "INS-")
 except ImportError:
     pass
+
+# --- SSN encryption helpers ---
+_SSN_KEY = None
+try:
+    _passphrase = os.environ.get("ERPCLAW_FIELD_KEY", "")
+    if _passphrase:
+        _SSN_KEY = derive_key(_passphrase, b"healthclaw_ssn_salt_v1")
+    else:
+        import secrets
+        _SSN_KEY = derive_key(secrets.token_hex(32), b"healthclaw_ssn_salt_v1")
+        print("WARNING: ERPCLAW_FIELD_KEY not set. SSN encryption key is ephemeral.", file=sys.stderr)
+except Exception:
+    pass
+
+
+def _encrypt_ssn(raw_ssn):
+    """Encrypt SSN for storage. Returns (encrypted_value, last4)."""
+    if not raw_ssn:
+        return None, None
+    digits = raw_ssn.replace("-", "").replace(" ", "")
+    last4 = digits[-4:] if len(digits) >= 4 else digits
+    if _SSN_KEY:
+        return _enc_raw(raw_ssn, _SSN_KEY), last4
+    raise ValueError("Cannot store SSN: encryption key not available. Set ERPCLAW_FIELD_KEY env var.")
+
+
+def _mask_ssn_in_row(data):
+    """Remove raw SSN from response, keep only last 4."""
+    if "ssn" in data:
+        raw = data.pop("ssn", None)
+        if raw and isinstance(raw, str) and raw.startswith("enc:"):
+            data["ssn_last4"] = data.get("ssn_last4") or "****"
+        elif raw:
+            # Legacy unencrypted — mask it
+            digits = raw.replace("-", "").replace(" ", "")
+            data["ssn_last4"] = digits[-4:] if len(digits) >= 4 else "****"
+        else:
+            data["ssn_last4"] = data.get("ssn_last4") or None
+    return data
 
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -108,20 +148,26 @@ def add_patient(conn, args):
         if not row:
             err(f"Customer {customer_id} not found")
 
+    # Encrypt SSN before storage
+    raw_ssn = getattr(args, "ssn", None)
+    encrypted_ssn, ssn_last4 = None, None
+    if raw_ssn:
+        encrypted_ssn, ssn_last4 = _encrypt_ssn(raw_ssn)
+
     now = _now_iso()
     conn.execute("""
         INSERT INTO healthclaw_patient (
             id, naming_series, customer_id, first_name, last_name, full_name,
-            date_of_birth, gender, ssn, mrn, marital_status, race, ethnicity,
+            date_of_birth, gender, ssn, ssn_last4, mrn, marital_status, race, ethnicity,
             preferred_language, primary_phone, secondary_phone, email,
             address_line1, address_line2, city, state, zip_code,
             primary_provider_id, status, notes, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         patient_id, mrn, customer_id,
         args.first_name, args.last_name, full_name,
         args.date_of_birth, args.gender,
-        getattr(args, "ssn", None), mrn,
+        encrypted_ssn, ssn_last4, mrn,
         getattr(args, "marital_status", None),
         getattr(args, "race", None),
         getattr(args, "ethnicity", None),
@@ -151,6 +197,7 @@ def get_patient(conn, args):
     _validate_patient(conn, args.patient_id)
     row = conn.execute("SELECT * FROM healthclaw_patient WHERE id = ?", (args.patient_id,)).fetchone()
     data = row_to_dict(row)
+    _mask_ssn_in_row(data)
 
     # Enrich with counts
     ins_count = conn.execute(
@@ -176,10 +223,17 @@ def update_patient(conn, args):
     params = []
     changed = []
 
+    # Handle SSN separately (needs encryption)
+    raw_ssn = getattr(args, "ssn", None)
+    if raw_ssn is not None:
+        encrypted_ssn, ssn_last4 = _encrypt_ssn(raw_ssn)
+        updates.append("ssn = ?"); params.append(encrypted_ssn); changed.append("ssn")
+        updates.append("ssn_last4 = ?"); params.append(ssn_last4); changed.append("ssn_last4")
+
     field_map = {
         "first_name": "first_name", "last_name": "last_name",
         "date_of_birth": "date_of_birth", "gender": "gender",
-        "ssn": "ssn", "marital_status": "marital_status",
+        "marital_status": "marital_status",
         "race": "race", "ethnicity": "ethnicity",
         "preferred_language": "preferred_language",
         "primary_phone": "primary_phone", "secondary_phone": "secondary_phone",
@@ -264,7 +318,7 @@ def list_patients(conn, args):
         params
     ).fetchall()
     ok({
-        "rows": [row_to_dict(r) for r in rows],
+        "rows": [_mask_ssn_in_row(row_to_dict(r)) for r in rows],
         "total_count": total,
         "limit": args.limit,
         "offset": args.offset,
