@@ -23,7 +23,7 @@ ENTITY_PREFIXES.setdefault("hcadv_dispense_log", "DISP-")
 
 # ---- Constants ---------------------------------------------------------------
 
-VALID_DEA_SCHEDULES = ("I", "II", "III", "IV", "V", "health-non-scheduled")
+VALID_DEA_SCHEDULES = ("I", "II", "III", "IV", "V", "non-scheduled")
 VALID_RX_STATUSES = ("active", "filled", "partially_filled", "expired", "cancelled")
 VALID_CS_LOG_TYPES = ("received", "dispensed", "destroyed", "returned", "adjusted")
 
@@ -59,7 +59,7 @@ def add_medication(conn, args):
     if not getattr(args, "name", None):
         err("--name is required")
 
-    dea_schedule = getattr(args, "dea_schedule", None) or "health-non-scheduled"
+    dea_schedule = getattr(args, "dea_schedule", None) or "non-scheduled"
     _validate_enum(dea_schedule, VALID_DEA_SCHEDULES, "health-dea-schedule")
 
     unit_price = str(round_currency(to_decimal(getattr(args, "unit_price", None) or "0.00")))
@@ -191,9 +191,9 @@ def add_prescription(conn, args):
         err(f"Medication {args.medication_id} not found")
 
     # If controlled substance, require DEA number
-    dea_schedule = med_row[1] if med_row else "health-non-scheduled"
+    dea_schedule = med_row[1] if med_row else "non-scheduled"
     dea_number = getattr(args, "dea_number", None)
-    if dea_schedule != "health-non-scheduled" and not dea_number:
+    if dea_schedule != "non-scheduled" and not dea_number:
         err(f"DEA number required for schedule {dea_schedule} medication")
     if dea_number:
         _validate_dea_number(dea_number)
@@ -322,7 +322,7 @@ def fill_prescription(conn, args):
     # If controlled substance, log it
     med_row = conn.execute("SELECT dea_schedule FROM hcadv_medication WHERE id = ?",
                            (rx["medication_id"],)).fetchone()
-    if med_row and med_row[0] != "health-non-scheduled":
+    if med_row and med_row[0] != "non-scheduled":
         cs_log_id = str(uuid.uuid4())
         conn.execute(
             """INSERT INTO hcadv_controlled_substance_log
@@ -396,7 +396,7 @@ def refill_prescription(conn, args):
     # Controlled substance log
     med_row = conn.execute("SELECT dea_schedule FROM hcadv_medication WHERE id = ?",
                            (rx["medication_id"],)).fetchone()
-    if med_row and med_row[0] != "health-non-scheduled":
+    if med_row and med_row[0] != "non-scheduled":
         cs_log_id = str(uuid.uuid4())
         conn.execute(
             """INSERT INTO hcadv_controlled_substance_log
@@ -544,7 +544,7 @@ def medication_inventory_report(conn, args):
         elif qty <= int(d.get("reorder_level", 0)):
             below_reorder.append({"id": d["id"], "name": d["name"],
                                   "quantity_on_hand": qty, "reorder_level": d["reorder_level"]})
-        if d.get("dea_schedule") != "health-non-scheduled":
+        if d.get("dea_schedule") != "non-scheduled":
             controlled.append({"id": d["id"], "name": d["name"],
                                "dea_schedule": d["dea_schedule"], "quantity_on_hand": qty})
 
