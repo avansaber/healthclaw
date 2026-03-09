@@ -4,7 +4,7 @@ version: 1.0.0
 description: Home Health expansion for HealthClaw -- home visits, 485 care plans, OASIS assessments, and aide assignment management for home health agencies.
 author: AvanSaber / Nikhil Jathar
 homepage: https://www.healthclaw.ai
-source: https://github.com/avansaber/healthclaw-homehealth
+source: https://github.com/avansaber/healthclaw
 tier: 4
 category: healthcare
 requires: [erpclaw, healthclaw]

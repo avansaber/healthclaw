@@ -4,7 +4,7 @@ version: 1.0.0
 description: Veterinary expansion for HealthClaw -- animal patient records, boarding/kennel management, weight-based medication dosing, and multi-owner linking.
 author: AvanSaber / Nikhil Jathar
 homepage: https://www.healthclaw.ai
-source: https://github.com/avansaber/healthclaw-vet
+source: https://github.com/avansaber/healthclaw
 tier: 4
 category: healthcare
 requires: [erpclaw, healthclaw]
