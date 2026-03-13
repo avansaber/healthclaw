@@ -376,7 +376,7 @@ def add_claim(conn, args):
             patient_responsibility, adjustment_amount,
             billing_provider_id, rendering_provider_id,
             place_of_service, claim_type, filing_indicator, prior_auth_id,
-            sales_invoice_id, status, denial_reason, appeal_deadline,
+            sales_invoice_id, claim_status, denial_reason, appeal_deadline,
             notes, company_id, created_at, updated_at
         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
@@ -400,7 +400,7 @@ def add_claim(conn, args):
     ))
     audit(conn, "healthclaw_claim", claim_id, "health-add-claim", args.company_id)
     conn.commit()
-    ok({"id": claim_id, "naming_series": naming, "claim_date": claim_date, "status": "draft"})
+    ok({"id": claim_id, "naming_series": naming, "claim_date": claim_date, "claim_status": "draft"})
 
 
 # ---------------------------------------------------------------------------
@@ -565,7 +565,7 @@ def submit_claim(conn, args):
     claim_id = getattr(args, "claim_id", None)
     if not claim_id:
         err("--claim-id is required")
-    row = conn.execute("SELECT status FROM healthclaw_claim WHERE id = ?", (claim_id,)).fetchone()
+    row = conn.execute("SELECT claim_status FROM healthclaw_claim WHERE id = ?", (claim_id,)).fetchone()
     if not row:
         err(f"Claim {claim_id} not found")
     if row[0] != "draft":
@@ -579,12 +579,12 @@ def submit_claim(conn, args):
         err("Cannot submit claim with no claim lines. Add at least one claim line first.")
 
     conn.execute(
-        "UPDATE healthclaw_claim SET status = 'submitted', updated_at = datetime('now') WHERE id = ?",
+        "UPDATE healthclaw_claim SET claim_status = 'submitted', updated_at = datetime('now') WHERE id = ?",
         (claim_id,)
     )
     audit(conn, "healthclaw_claim", claim_id, "health-submit-claim", None)
     conn.commit()
-    ok({"id": claim_id, "status": "submitted", "line_count": line_count})
+    ok({"id": claim_id, "claim_status": "submitted", "line_count": line_count})
 
 
 # ---------------------------------------------------------------------------
