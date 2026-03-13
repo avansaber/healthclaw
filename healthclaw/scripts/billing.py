@@ -278,7 +278,7 @@ def add_charge(conn, args):
             cpt_code, modifiers, diagnosis_ids, units,
             charge_amount, allowed_amount, fee_schedule_id,
             service_date, provider_id, place_of_service,
-            status, notes, company_id, created_at, updated_at
+            charge_status, notes, company_id, created_at, updated_at
         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         charge_id, naming, args.encounter_id, args.patient_id,
@@ -311,7 +311,7 @@ def list_charges(conn, args):
         where.append("patient_id = ?")
         params.append(args.patient_id)
     if getattr(args, "status", None):
-        where.append("status = ?")
+        where.append("charge_status = ?")
         params.append(args.status)
     if getattr(args, "company_id", None):
         where.append("company_id = ?")
@@ -438,9 +438,9 @@ def update_claim(conn, args):
     claim_status = getattr(args, "claim_status", None)
     if claim_status is not None:
         _validate_enum(claim_status, VALID_CLAIM_STATUSES, "status")
-        updates.append("status = ?")
+        updates.append("claim_status = ?")
         params.append(claim_status)
-        changed.append("status")
+        changed.append("claim_status")
 
     # Money fields
     for mf in ("total_charge", "total_allowed", "total_paid", "patient_responsibility", "adjustment_amount"):
@@ -535,7 +535,7 @@ def list_claims(conn, args):
         where.append("patient_id = ?")
         params.append(args.patient_id)
     if getattr(args, "status", None):
-        where.append("status = ?")
+        where.append("claim_status = ?")
         params.append(args.status)
     if getattr(args, "company_id", None):
         where.append("company_id = ?")
