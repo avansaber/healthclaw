@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
 
 from erpclaw_lib.db import get_connection
 from erpclaw_lib.response import ok, err
+from erpclaw_lib.args import SafeArgumentParser
 
 from dental import ACTIONS as DENTAL_ACTIONS
 
@@ -25,7 +26,7 @@ ACTIONS.update(DENTAL_ACTIONS)
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(description="HealthClaw Dental — dental expansion")
+    parser = SafeArgumentParser(description="HealthClaw Dental — dental expansion")
     parser.add_argument("--action", required=True, help="Action to execute")
 
     # Common flags
