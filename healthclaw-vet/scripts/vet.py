@@ -15,6 +15,7 @@ try:
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
 except ImportError:
     pass
 
@@ -50,7 +51,9 @@ def add_animal_patient(conn, args):
         err("--species is required")
 
     # Validate patient exists
-    if not conn.execute("SELECT id FROM healthclaw_patient WHERE id = ?", (args.patient_id,)).fetchone():
+    t = Table("healthclaw_patient")
+    q = Q.from_(t).select(t.id).where(t.id == P())
+    if not conn.execute(q.get_sql(), (args.patient_id,)).fetchone():
         err(f"Patient {args.patient_id} not found")
 
     _validate_enum(args.species, VALID_SPECIES, "species")
@@ -64,17 +67,19 @@ def add_animal_patient(conn, args):
 
     entry_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute(
-        """INSERT INTO healthclaw_animal_patient
-           (id, company_id, patient_id, species, breed, color, weight_kg, microchip_id,
-            spay_neuter_status, reproductive_status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (entry_id, args.company_id, args.patient_id, args.species,
-         getattr(args, "breed", None), getattr(args, "color", None),
-         weight_kg, getattr(args, "microchip_id", None),
-         spay_neuter_status, getattr(args, "reproductive_status", None),
-         now, now)
-    )
+    sql, _ = insert_row("healthclaw_animal_patient", {
+        "id": P(), "company_id": P(), "patient_id": P(), "species": P(),
+        "breed": P(), "color": P(), "weight_kg": P(), "microchip_id": P(),
+        "spay_neuter_status": P(), "reproductive_status": P(),
+        "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(sql, (
+        entry_id, args.company_id, args.patient_id, args.species,
+        getattr(args, "breed", None), getattr(args, "color", None),
+        weight_kg, getattr(args, "microchip_id", None),
+        spay_neuter_status, getattr(args, "reproductive_status", None),
+        now, now,
+    ))
     audit(conn, "healthclaw_animal_patient", entry_id, "vet-add-animal-patient", args.company_id)
     conn.commit()
     ok({"id": entry_id, "species": args.species, "patient_id": args.patient_id})
@@ -87,7 +92,9 @@ def update_animal_patient(conn, args):
     entry_id = getattr(args, "animal_patient_id", None)
     if not entry_id:
         err("--animal-patient-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_animal_patient WHERE id = ?", (entry_id,)).fetchone():
+    t = Table("healthclaw_animal_patient")
+    q = Q.from_(t).select(t.id).where(t.id == P())
+    if not conn.execute(q.get_sql(), (entry_id,)).fetchone():
         err(f"Animal patient {entry_id} not found")
 
     updates, params, changed = [], [], []
@@ -132,7 +139,9 @@ def get_animal_patient(conn, args):
     entry_id = getattr(args, "animal_patient_id", None)
     if not entry_id:
         err("--animal-patient-id is required")
-    row = conn.execute("SELECT * FROM healthclaw_animal_patient WHERE id = ?", (entry_id,)).fetchone()
+    t = Table("healthclaw_animal_patient")
+    q = Q.from_(t).select(t.star).where(t.id == P())
+    row = conn.execute(q.get_sql(), (entry_id,)).fetchone()
     if not row:
         err(f"Animal patient {entry_id} not found")
     ok(row_to_dict(row))
@@ -142,21 +151,33 @@ def get_animal_patient(conn, args):
 # 4. list-animal-patients
 # ---------------------------------------------------------------------------
 def list_animal_patients(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_animal_patient")
+
+    # Build WHERE conditions
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "company_id", None):
-        where.append("company_id = ?"); params.append(args.company_id)
+        q_count = q_count.where(t.company_id == P())
+        q_rows = q_rows.where(t.company_id == P())
+        params.append(args.company_id)
     if getattr(args, "species", None):
-        where.append("species = ?"); params.append(args.species)
+        q_count = q_count.where(t.species == P())
+        q_rows = q_rows.where(t.species == P())
+        params.append(args.species)
     if getattr(args, "search", None):
-        where.append("(breed LIKE ? OR color LIKE ? OR microchip_id LIKE ?)")
+        from erpclaw_lib.vendor.pypika.terms import Criterion
         s = f"%{args.search}%"
+        search_crit = (t.breed.like(P())) | (t.color.like(P())) | (t.microchip_id.like(P()))
+        q_count = q_count.where(search_crit)
+        q_rows = q_rows.where(search_crit)
         params.extend([s, s, s])
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_animal_patient WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_animal_patient WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?", params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+
+    q_rows = q_rows.orderby(t.created_at, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": args.limit, "offset": args.offset, "has_more": (args.offset + args.limit) < total})
 
@@ -173,7 +194,9 @@ def add_boarding(conn, args):
         err("--check-in-date is required")
 
     # Validate animal patient exists
-    if not conn.execute("SELECT id FROM healthclaw_animal_patient WHERE id = ?", (args.animal_patient_id,)).fetchone():
+    t = Table("healthclaw_animal_patient")
+    q = Q.from_(t).select(t.id).where(t.id == P())
+    if not conn.execute(q.get_sql(), (args.animal_patient_id,)).fetchone():
         err(f"Animal patient {args.animal_patient_id} not found")
 
     daily_rate = getattr(args, "daily_rate", None)
@@ -182,18 +205,20 @@ def add_boarding(conn, args):
 
     entry_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute(
-        """INSERT INTO healthclaw_boarding
-           (id, company_id, animal_patient_id, check_in_date, check_out_date, kennel_number,
-            feeding_instructions, medication_schedule, special_needs, daily_rate, status, notes,
-            created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'checked_in', ?, ?, ?)""",
-        (entry_id, args.company_id, args.animal_patient_id, args.check_in_date,
-         getattr(args, "check_out_date", None), getattr(args, "kennel_number", None),
-         getattr(args, "feeding_instructions", None), getattr(args, "medication_schedule", None),
-         getattr(args, "special_needs", None), daily_rate,
-         getattr(args, "notes", None), now, now)
-    )
+    sql, _ = insert_row("healthclaw_boarding", {
+        "id": P(), "company_id": P(), "animal_patient_id": P(),
+        "check_in_date": P(), "check_out_date": P(), "kennel_number": P(),
+        "feeding_instructions": P(), "medication_schedule": P(),
+        "special_needs": P(), "daily_rate": P(), "status": P(), "notes": P(),
+        "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(sql, (
+        entry_id, args.company_id, args.animal_patient_id, args.check_in_date,
+        getattr(args, "check_out_date", None), getattr(args, "kennel_number", None),
+        getattr(args, "feeding_instructions", None), getattr(args, "medication_schedule", None),
+        getattr(args, "special_needs", None), daily_rate, "checked_in",
+        getattr(args, "notes", None), now, now,
+    ))
     audit(conn, "healthclaw_boarding", entry_id, "vet-add-boarding", args.company_id)
     conn.commit()
     ok({"id": entry_id, "animal_patient_id": args.animal_patient_id, "check_in_date": args.check_in_date})
@@ -206,7 +231,9 @@ def update_boarding(conn, args):
     entry_id = getattr(args, "boarding_id", None)
     if not entry_id:
         err("--boarding-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_boarding WHERE id = ?", (entry_id,)).fetchone():
+    t = Table("healthclaw_boarding")
+    q = Q.from_(t).select(t.id).where(t.id == P())
+    if not conn.execute(q.get_sql(), (entry_id,)).fetchone():
         err(f"Boarding {entry_id} not found")
 
     updates, params, changed = [], [], []
@@ -244,17 +271,23 @@ def update_boarding(conn, args):
 # 7. list-boardings
 # ---------------------------------------------------------------------------
 def list_boardings(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_boarding")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "animal_patient_id", None):
-        where.append("animal_patient_id = ?"); params.append(args.animal_patient_id)
+        q_count = q_count.where(t.animal_patient_id == P())
+        q_rows = q_rows.where(t.animal_patient_id == P())
+        params.append(args.animal_patient_id)
     if getattr(args, "status", None):
-        where.append("status = ?"); params.append(args.status)
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_boarding WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_boarding WHERE {where_sql} ORDER BY check_in_date DESC LIMIT ? OFFSET ?", params
-    ).fetchall()
+        q_count = q_count.where(t.status == P())
+        q_rows = q_rows.where(t.status == P())
+        params.append(args.status)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.check_in_date, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": args.limit, "offset": args.offset, "has_more": (args.offset + args.limit) < total})
 
@@ -273,7 +306,9 @@ def calculate_dose(conn, args):
         err("--dose-per-kg is required")
 
     # Validate animal patient exists
-    row = conn.execute("SELECT * FROM healthclaw_animal_patient WHERE id = ?", (args.animal_patient_id,)).fetchone()
+    t = Table("healthclaw_animal_patient")
+    q = Q.from_(t).select(t.star).where(t.id == P())
+    row = conn.execute(q.get_sql(), (args.animal_patient_id,)).fetchone()
     if not row:
         err(f"Animal patient {args.animal_patient_id} not found")
     animal = row_to_dict(row)
@@ -298,18 +333,20 @@ def calculate_dose(conn, args):
 
     entry_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute(
-        """INSERT INTO healthclaw_weight_dosing
-           (id, company_id, animal_patient_id, weight_date, weight_kg, medication_name,
-            dose_per_kg, calculated_dose, dose_unit, route, frequency, notes,
-            created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (entry_id, args.company_id, args.animal_patient_id, weight_date,
-         str(weight_kg), args.medication_name, str(dose_per_kg), str(calculated_dose),
-         getattr(args, "dose_unit", None) or "mg", route,
-         getattr(args, "frequency", None), getattr(args, "notes", None),
-         now, now)
-    )
+    sql, _ = insert_row("healthclaw_weight_dosing", {
+        "id": P(), "company_id": P(), "animal_patient_id": P(),
+        "weight_date": P(), "weight_kg": P(), "medication_name": P(),
+        "dose_per_kg": P(), "calculated_dose": P(), "dose_unit": P(),
+        "route": P(), "frequency": P(), "notes": P(),
+        "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(sql, (
+        entry_id, args.company_id, args.animal_patient_id, weight_date,
+        str(weight_kg), args.medication_name, str(dose_per_kg), str(calculated_dose),
+        getattr(args, "dose_unit", None) or "mg", route,
+        getattr(args, "frequency", None), getattr(args, "notes", None),
+        now, now,
+    ))
     audit(conn, "healthclaw_weight_dosing", entry_id, "vet-calculate-dose", args.company_id)
     conn.commit()
     ok({
@@ -326,17 +363,23 @@ def calculate_dose(conn, args):
 # 9. list-dosing-history
 # ---------------------------------------------------------------------------
 def list_dosing_history(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_weight_dosing")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "animal_patient_id", None):
-        where.append("animal_patient_id = ?"); params.append(args.animal_patient_id)
+        q_count = q_count.where(t.animal_patient_id == P())
+        q_rows = q_rows.where(t.animal_patient_id == P())
+        params.append(args.animal_patient_id)
     if getattr(args, "medication_name", None):
-        where.append("medication_name = ?"); params.append(args.medication_name)
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_weight_dosing WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_weight_dosing WHERE {where_sql} ORDER BY weight_date DESC LIMIT ? OFFSET ?", params
-    ).fetchall()
+        q_count = q_count.where(t.medication_name == P())
+        q_rows = q_rows.where(t.medication_name == P())
+        params.append(args.medication_name)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.weight_date, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": args.limit, "offset": args.offset, "has_more": (args.offset + args.limit) < total})
 
@@ -353,7 +396,9 @@ def add_owner_link(conn, args):
         err("--owner-name is required")
 
     # Validate animal patient exists
-    if not conn.execute("SELECT id FROM healthclaw_animal_patient WHERE id = ?", (args.animal_patient_id,)).fetchone():
+    t = Table("healthclaw_animal_patient")
+    q = Q.from_(t).select(t.id).where(t.id == P())
+    if not conn.execute(q.get_sql(), (args.animal_patient_id,)).fetchone():
         err(f"Animal patient {args.animal_patient_id} not found")
 
     relationship = getattr(args, "relationship", None) or "owner"
@@ -364,17 +409,18 @@ def add_owner_link(conn, args):
 
     entry_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute(
-        """INSERT INTO healthclaw_owner_link
-           (id, company_id, animal_patient_id, owner_name, owner_phone, owner_email,
-            relationship, is_primary, financial_responsibility, notes,
-            created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (entry_id, args.company_id, args.animal_patient_id, args.owner_name,
-         getattr(args, "owner_phone", None), getattr(args, "owner_email", None),
-         relationship, is_primary, financial_responsibility,
-         getattr(args, "notes", None), now, now)
-    )
+    sql, _ = insert_row("healthclaw_owner_link", {
+        "id": P(), "company_id": P(), "animal_patient_id": P(),
+        "owner_name": P(), "owner_phone": P(), "owner_email": P(),
+        "relationship": P(), "is_primary": P(), "financial_responsibility": P(),
+        "notes": P(), "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(sql, (
+        entry_id, args.company_id, args.animal_patient_id, args.owner_name,
+        getattr(args, "owner_phone", None), getattr(args, "owner_email", None),
+        relationship, is_primary, financial_responsibility,
+        getattr(args, "notes", None), now, now,
+    ))
     audit(conn, "healthclaw_owner_link", entry_id, "vet-add-owner-link", args.company_id)
     conn.commit()
     ok({"id": entry_id, "owner_name": args.owner_name, "animal_patient_id": args.animal_patient_id})
@@ -387,7 +433,9 @@ def update_owner_link(conn, args):
     entry_id = getattr(args, "owner_link_id", None)
     if not entry_id:
         err("--owner-link-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_owner_link WHERE id = ?", (entry_id,)).fetchone():
+    t = Table("healthclaw_owner_link")
+    q = Q.from_(t).select(t.id).where(t.id == P())
+    if not conn.execute(q.get_sql(), (entry_id,)).fetchone():
         err(f"Owner link {entry_id} not found")
 
     updates, params, changed = [], [], []
@@ -426,15 +474,19 @@ def update_owner_link(conn, args):
 # 12. list-owner-links
 # ---------------------------------------------------------------------------
 def list_owner_links(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_owner_link")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "animal_patient_id", None):
-        where.append("animal_patient_id = ?"); params.append(args.animal_patient_id)
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_owner_link WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_owner_link WHERE {where_sql} ORDER BY is_primary DESC, created_at DESC LIMIT ? OFFSET ?", params
-    ).fetchall()
+        q_count = q_count.where(t.animal_patient_id == P())
+        q_rows = q_rows.where(t.animal_patient_id == P())
+        params.append(args.animal_patient_id)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.is_primary, order=Order.desc).orderby(t.created_at, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": args.limit, "offset": args.offset, "has_more": (args.offset + args.limit) < total})
 

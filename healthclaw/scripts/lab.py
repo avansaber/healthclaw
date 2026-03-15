@@ -17,6 +17,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row
 
     # Register HealthClaw naming prefixes (lab domain)
     ENTITY_PREFIXES.setdefault("healthclaw_lab_order", "LAB-")
@@ -46,21 +47,21 @@ VALID_IMAGING_RESULT_STATUSES = ("preliminary", "final", "addended", "corrected"
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    if not conn.execute("SELECT id FROM company WHERE id = ?", (company_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
 
 def _validate_patient(conn, patient_id):
     if not patient_id:
         err("--patient-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_patient WHERE id = ?", (patient_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_patient")).select(Field("id")).where(Field("id") == P()).get_sql(), (patient_id,)).fetchone():
         err(f"Patient {patient_id} not found")
 
 
 def _validate_encounter(conn, encounter_id):
     if not encounter_id:
         err("--encounter-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_encounter WHERE id = ?", (encounter_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_encounter")).select(Field("id")).where(Field("id") == P()).get_sql(), (encounter_id,)).fetchone():
         err(f"Encounter {encounter_id} not found")
 
 
@@ -80,7 +81,7 @@ def add_lab_order(conn, args):
     ordering_provider_id = getattr(args, "ordering_provider_id", None)
     if not ordering_provider_id:
         err("--ordering-provider-id is required")
-    if not conn.execute("SELECT id FROM employee WHERE id = ?", (ordering_provider_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (ordering_provider_id,)).fetchone():
         err(f"Provider (employee) {ordering_provider_id} not found")
 
     order_date = getattr(args, "order_date", None)
@@ -93,20 +94,15 @@ def add_lab_order(conn, args):
     # Optional order link
     order_id = getattr(args, "order_id", None)
     if order_id:
-        if not conn.execute("SELECT id FROM healthclaw_order WHERE id = ?", (order_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("healthclaw_order")).select(Field("id")).where(Field("id") == P()).get_sql(), (order_id,)).fetchone():
             err(f"Order {order_id} not found")
 
     lab_order_id = str(uuid.uuid4())
     naming = get_next_name(conn, "healthclaw_lab_order", company_id=args.company_id)
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_lab_order (
-            id, naming_series, order_id, encounter_id, patient_id,
-            ordering_provider_id, order_date, priority, fasting_required,
-            clinical_indication, specimen_type, collection_date, received_date,
-            status, notes, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_lab_order", {"id": P(), "naming_series": P(), "order_id": P(), "encounter_id": P(), "patient_id": P(), "ordering_provider_id": P(), "order_date": P(), "priority": P(), "fasting_required": P(), "clinical_indication": P(), "specimen_type": P(), "collection_date": P(), "received_date": P(), "status": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql, (
         lab_order_id, naming, order_id, args.encounter_id, args.patient_id,
         ordering_provider_id, order_date, priority,
         1 if getattr(args, "fasting_required", None) == "1" else 0,
@@ -130,7 +126,7 @@ def update_lab_order(conn, args):
     lab_order_id = getattr(args, "lab_order_id", None)
     if not lab_order_id:
         err("--lab-order-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_lab_order WHERE id = ?", (lab_order_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_lab_order")).select(Field("id")).where(Field("id") == P()).get_sql(), (lab_order_id,)).fetchone():
         err(f"Lab order {lab_order_id} not found")
 
     updates, params, changed = [], [], []
@@ -184,7 +180,7 @@ def get_lab_order(conn, args):
     lab_order_id = getattr(args, "lab_order_id", None)
     if not lab_order_id:
         err("--lab-order-id is required")
-    row = conn.execute("SELECT * FROM healthclaw_lab_order WHERE id = ?", (lab_order_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_lab_order")).select(Table("healthclaw_lab_order").star).where(Field("id") == P()).get_sql(), (lab_order_id,)).fetchone()
     if not row:
         err(f"Lab order {lab_order_id} not found")
     data = row_to_dict(row)
@@ -198,9 +194,7 @@ def get_lab_order(conn, args):
     if prov:
         data["ordering_provider_name"] = prov[0]
     # Enrich: test count
-    data["test_count"] = conn.execute(
-        "SELECT COUNT(*) FROM healthclaw_lab_test WHERE lab_order_id = ?", (lab_order_id,)
-    ).fetchone()[0]
+    data["test_count"] = conn.execute(Q.from_(Table("healthclaw_lab_test")).select(fn.Count("*")).where(Field("lab_order_id") == P()).get_sql(), (lab_order_id,)).fetchone()[0]
     ok(data)
 
 
@@ -208,27 +202,53 @@ def get_lab_order(conn, args):
 # 4. list-lab-orders
 # ---------------------------------------------------------------------------
 def list_lab_orders(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_lab_order")
+
+    q_count = Q.from_(t).select(fn.Count("*"))
+
+    q_rows = Q.from_(t).select(t.star)
+
+    params = []
+
+
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?")
+
+        q_count = q_count.where(t.patient_id == P())
+
+        q_rows = q_rows.where(t.patient_id == P())
+
         params.append(args.patient_id)
+
     if getattr(args, "status", None):
-        where.append("status = ?")
+
+        q_count = q_count.where(t.status == P())
+
+        q_rows = q_rows.where(t.status == P())
+
         params.append(args.status)
+
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+
+        q_count = q_count.where(t.company_id == P())
+
+        q_rows = q_rows.where(t.company_id == P())
+
         params.append(args.company_id)
+
     if getattr(args, "ordering_provider_id", None):
-        where.append("ordering_provider_id = ?")
+
+        q_count = q_count.where(t.ordering_provider_id == P())
+
+        q_rows = q_rows.where(t.ordering_provider_id == P())
+
         params.append(args.ordering_provider_id)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_lab_order WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_lab_order WHERE {where_sql} ORDER BY order_date DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+
+    q_rows = q_rows.orderby(t.order_date, order=Order.desc).limit(P()).offset(P())
+
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -243,7 +263,7 @@ def add_lab_test(conn, args):
     lab_order_id = getattr(args, "lab_order_id", None)
     if not lab_order_id:
         err("--lab-order-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_lab_order WHERE id = ?", (lab_order_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_lab_order")).select(Field("id")).where(Field("id") == P()).get_sql(), (lab_order_id,)).fetchone():
         err(f"Lab order {lab_order_id} not found")
 
     test_code = getattr(args, "test_code", None)
@@ -255,12 +275,9 @@ def add_lab_test(conn, args):
 
     lt_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_lab_test (
-            id, lab_order_id, test_code, test_name, cpt_code,
-            status, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_lab_test", {"id": P(), "lab_order_id": P(), "test_code": P(), "test_name": P(), "cpt_code": P(), "status": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql, (
         lt_id, lab_order_id, test_code, test_name,
         getattr(args, "cpt_code", None),
         "pending", now, now,
@@ -274,21 +291,37 @@ def add_lab_test(conn, args):
 # 6. list-lab-tests
 # ---------------------------------------------------------------------------
 def list_lab_tests(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_lab_test")
+
+    q_count = Q.from_(t).select(fn.Count("*"))
+
+    q_rows = Q.from_(t).select(t.star)
+
+    params = []
+
+
     if getattr(args, "lab_order_id", None):
-        where.append("lab_order_id = ?")
+
+        q_count = q_count.where(t.lab_order_id == P())
+
+        q_rows = q_rows.where(t.lab_order_id == P())
+
         params.append(args.lab_order_id)
+
     if getattr(args, "status", None):
-        where.append("status = ?")
+
+        q_count = q_count.where(t.status == P())
+
+        q_rows = q_rows.where(t.status == P())
+
         params.append(args.status)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_lab_test WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_lab_test WHERE {where_sql} ORDER BY created_at ASC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+
+    q_rows = q_rows.orderby(t.created_at, order=Order.asc).limit(P()).offset(P())
+
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -303,7 +336,7 @@ def add_lab_result(conn, args):
     lab_test_id = getattr(args, "lab_test_id", None)
     if not lab_test_id:
         err("--lab-test-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_lab_test WHERE id = ?", (lab_test_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_lab_test")).select(Field("id")).where(Field("id") == P()).get_sql(), (lab_test_id,)).fetchone():
         err(f"Lab test {lab_test_id} not found")
 
     component_name = getattr(args, "component_name", None)
@@ -322,22 +355,18 @@ def add_lab_result(conn, args):
     # Optional FK checks
     performed_by_id = getattr(args, "performed_by_id", None)
     if performed_by_id:
-        if not conn.execute("SELECT id FROM employee WHERE id = ?", (performed_by_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (performed_by_id,)).fetchone():
             err(f"Employee {performed_by_id} not found")
     verified_by_id = getattr(args, "verified_by_id", None)
     if verified_by_id:
-        if not conn.execute("SELECT id FROM employee WHERE id = ?", (verified_by_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (verified_by_id,)).fetchone():
             err(f"Employee {verified_by_id} not found")
 
     lr_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_lab_result (
-            id, lab_test_id, component_name, value, unit,
-            reference_low, reference_high, flag,
-            result_date, performed_by_id, verified_by_id, notes, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_lab_result", {"id": P(), "lab_test_id": P(), "component_name": P(), "value": P(), "unit": P(), "reference_low": P(), "reference_high": P(), "flag": P(), "result_date": P(), "performed_by_id": P(), "verified_by_id": P(), "notes": P(), "created_at": P()})
+
+    conn.execute(sql, (
         lr_id, lab_test_id, component_name, value,
         getattr(args, "unit", None),
         getattr(args, "reference_low", None),
@@ -355,21 +384,37 @@ def add_lab_result(conn, args):
 # 8. list-lab-results
 # ---------------------------------------------------------------------------
 def list_lab_results(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_lab_result")
+
+    q_count = Q.from_(t).select(fn.Count("*"))
+
+    q_rows = Q.from_(t).select(t.star)
+
+    params = []
+
+
     if getattr(args, "lab_test_id", None):
-        where.append("lab_test_id = ?")
+
+        q_count = q_count.where(t.lab_test_id == P())
+
+        q_rows = q_rows.where(t.lab_test_id == P())
+
         params.append(args.lab_test_id)
+
     if getattr(args, "flag", None):
-        where.append("flag = ?")
+
+        q_count = q_count.where(t.flag == P())
+
+        q_rows = q_rows.where(t.flag == P())
+
         params.append(args.flag)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_lab_result WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_lab_result WHERE {where_sql} ORDER BY result_date DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+
+    q_rows = q_rows.orderby(t.result_date, order=Order.desc).limit(P()).offset(P())
+
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -388,7 +433,7 @@ def add_imaging_order(conn, args):
     ordering_provider_id = getattr(args, "ordering_provider_id", None)
     if not ordering_provider_id:
         err("--ordering-provider-id is required")
-    if not conn.execute("SELECT id FROM employee WHERE id = ?", (ordering_provider_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (ordering_provider_id,)).fetchone():
         err(f"Provider (employee) {ordering_provider_id} not found")
 
     modality = getattr(args, "modality", None)
@@ -413,21 +458,15 @@ def add_imaging_order(conn, args):
     # Optional order link
     order_id = getattr(args, "order_id", None)
     if order_id:
-        if not conn.execute("SELECT id FROM healthclaw_order WHERE id = ?", (order_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("healthclaw_order")).select(Field("id")).where(Field("id") == P()).get_sql(), (order_id,)).fetchone():
             err(f"Order {order_id} not found")
 
     img_order_id = str(uuid.uuid4())
     naming = get_next_name(conn, "healthclaw_imaging_order", company_id=args.company_id)
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_imaging_order (
-            id, naming_series, order_id, encounter_id, patient_id,
-            ordering_provider_id, modality, body_part, laterality,
-            cpt_code, order_date, priority, clinical_indication,
-            contrast, status, scheduled_date, notes, company_id,
-            created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_imaging_order", {"id": P(), "naming_series": P(), "order_id": P(), "encounter_id": P(), "patient_id": P(), "ordering_provider_id": P(), "modality": P(), "body_part": P(), "laterality": P(), "cpt_code": P(), "order_date": P(), "priority": P(), "clinical_indication": P(), "contrast": P(), "status": P(), "scheduled_date": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql, (
         img_order_id, naming, order_id, args.encounter_id, args.patient_id,
         ordering_provider_id, modality, body_part, laterality,
         getattr(args, "cpt_code", None),
@@ -451,7 +490,7 @@ def update_imaging_order(conn, args):
     img_order_id = getattr(args, "imaging_order_id", None)
     if not img_order_id:
         err("--imaging-order-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_imaging_order WHERE id = ?", (img_order_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_imaging_order")).select(Field("id")).where(Field("id") == P()).get_sql(), (img_order_id,)).fetchone():
         err(f"Imaging order {img_order_id} not found")
 
     updates, params, changed = [], [], []
@@ -516,27 +555,53 @@ def update_imaging_order(conn, args):
 # 11. list-imaging-orders
 # ---------------------------------------------------------------------------
 def list_imaging_orders(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_imaging_order")
+
+    q_count = Q.from_(t).select(fn.Count("*"))
+
+    q_rows = Q.from_(t).select(t.star)
+
+    params = []
+
+
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?")
+
+        q_count = q_count.where(t.patient_id == P())
+
+        q_rows = q_rows.where(t.patient_id == P())
+
         params.append(args.patient_id)
+
     if getattr(args, "modality", None):
-        where.append("modality = ?")
+
+        q_count = q_count.where(t.modality == P())
+
+        q_rows = q_rows.where(t.modality == P())
+
         params.append(args.modality)
+
     if getattr(args, "status", None):
-        where.append("status = ?")
+
+        q_count = q_count.where(t.status == P())
+
+        q_rows = q_rows.where(t.status == P())
+
         params.append(args.status)
+
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+
+        q_count = q_count.where(t.company_id == P())
+
+        q_rows = q_rows.where(t.company_id == P())
+
         params.append(args.company_id)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_imaging_order WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_imaging_order WHERE {where_sql} ORDER BY order_date DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+
+    q_rows = q_rows.orderby(t.order_date, order=Order.desc).limit(P()).offset(P())
+
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -551,7 +616,7 @@ def add_imaging_result(conn, args):
     imaging_order_id = getattr(args, "imaging_order_id", None)
     if not imaging_order_id:
         err("--imaging-order-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_imaging_order WHERE id = ?", (imaging_order_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_imaging_order")).select(Field("id")).where(Field("id") == P()).get_sql(), (imaging_order_id,)).fetchone():
         err(f"Imaging order {imaging_order_id} not found")
 
     report_date = getattr(args, "report_date", None)
@@ -561,18 +626,14 @@ def add_imaging_result(conn, args):
     # Optional FK check
     radiologist_id = getattr(args, "radiologist_id", None)
     if radiologist_id:
-        if not conn.execute("SELECT id FROM employee WHERE id = ?", (radiologist_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (radiologist_id,)).fetchone():
             err(f"Radiologist (employee) {radiologist_id} not found")
 
     ir_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_imaging_result (
-            id, imaging_order_id, radiologist_id, findings, impression,
-            recommendation, critical_finding, report_date, status,
-            addendum, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_imaging_result", {"id": P(), "imaging_order_id": P(), "radiologist_id": P(), "findings": P(), "impression": P(), "recommendation": P(), "critical_finding": P(), "report_date": P(), "status": P(), "addendum": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql, (
         ir_id, imaging_order_id, radiologist_id,
         getattr(args, "findings", None),
         getattr(args, "impression", None),
@@ -594,7 +655,7 @@ def update_imaging_result(conn, args):
     ir_id = getattr(args, "imaging_result_id", None)
     if not ir_id:
         err("--imaging-result-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_imaging_result WHERE id = ?", (ir_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_imaging_result")).select(Field("id")).where(Field("id") == P()).get_sql(), (ir_id,)).fetchone():
         err(f"Imaging result {ir_id} not found")
 
     updates, params, changed = [], [], []
@@ -618,7 +679,7 @@ def update_imaging_result(conn, args):
 
     radiologist_id = getattr(args, "radiologist_id", None)
     if radiologist_id is not None:
-        if not conn.execute("SELECT id FROM employee WHERE id = ?", (radiologist_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (radiologist_id,)).fetchone():
             err(f"Radiologist (employee) {radiologist_id} not found")
         updates.append("radiologist_id = ?")
         params.append(radiologist_id)
@@ -644,21 +705,37 @@ def update_imaging_result(conn, args):
 # 14. list-imaging-results
 # ---------------------------------------------------------------------------
 def list_imaging_results(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_imaging_result")
+
+    q_count = Q.from_(t).select(fn.Count("*"))
+
+    q_rows = Q.from_(t).select(t.star)
+
+    params = []
+
+
     if getattr(args, "imaging_order_id", None):
-        where.append("imaging_order_id = ?")
+
+        q_count = q_count.where(t.imaging_order_id == P())
+
+        q_rows = q_rows.where(t.imaging_order_id == P())
+
         params.append(args.imaging_order_id)
+
     if getattr(args, "status", None):
-        where.append("status = ?")
+
+        q_count = q_count.where(t.status == P())
+
+        q_rows = q_rows.where(t.status == P())
+
         params.append(args.status)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_imaging_result WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_imaging_result WHERE {where_sql} ORDER BY report_date DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+
+    q_rows = q_rows.orderby(t.report_date, order=Order.desc).limit(P()).offset(P())
+
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,

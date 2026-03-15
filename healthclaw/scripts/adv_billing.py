@@ -15,6 +15,7 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row
 except ImportError:
     pass
 
@@ -110,8 +111,7 @@ def add_charge(conn, args):
     # Validate procedure_code_id if provided
     procedure_code_id = getattr(args, "procedure_code_id", None)
     if procedure_code_id:
-        if not conn.execute("SELECT id FROM healthclaw_procedure_code WHERE id = ?",
-                            (procedure_code_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("healthclaw_procedure_code")).select(Field("id")).where(Field("id") == P()).get_sql(), (procedure_code_id,)).fetchone():
             err(f"Procedure code {procedure_code_id} not found")
 
     unit_fee = str(round_currency(to_decimal(getattr(args, "unit_fee", None) or "0.00")))
@@ -178,7 +178,7 @@ def get_charge(conn, args):
     charge_id = getattr(args, "charge_id", None)
     if not charge_id:
         err("--charge-id is required")
-    row = conn.execute("SELECT * FROM healthclaw_charge WHERE id = ?", (charge_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_charge")).select(Table("healthclaw_charge").star).where(Field("id") == P()).get_sql(), (charge_id,)).fetchone()
     if not row:
         err(f"Charge {charge_id} not found")
     data = row_to_dict(row)
@@ -209,7 +209,7 @@ def add_claim(conn, args):
     # Calculate total_charged from charges
     total_charged = Decimal("0.00")
     for cid in parsed_ids:
-        row = conn.execute("SELECT total_fee FROM healthclaw_charge WHERE id = ?", (cid,)).fetchone()
+        row = conn.execute(Q.from_(Table("healthclaw_charge")).select(Field("total_fee")).where(Field("id") == P()).get_sql(), (cid,)).fetchone()
         if row:
             total_charged += to_decimal(row[0])
 
@@ -275,7 +275,7 @@ def get_claim(conn, args):
     claim_id = getattr(args, "claim_id", None)
     if not claim_id:
         err("--claim-id is required")
-    row = conn.execute("SELECT * FROM healthclaw_claim WHERE id = ?", (claim_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_claim")).select(Table("healthclaw_claim").star).where(Field("id") == P()).get_sql(), (claim_id,)).fetchone()
     if not row:
         err(f"Claim {claim_id} not found")
     data = row_to_dict(row)
@@ -296,7 +296,7 @@ def submit_claim(conn, args):
     if not claim_id:
         err("--claim-id is required")
 
-    row = conn.execute("SELECT * FROM healthclaw_claim WHERE id = ?", (claim_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_claim")).select(Table("healthclaw_claim").star).where(Field("id") == P()).get_sql(), (claim_id,)).fetchone()
     if not row:
         err(f"Claim {claim_id} not found")
     claim = row_to_dict(row)
@@ -337,15 +337,13 @@ def add_payment_posting(conn, args):
             err(f"--{req.replace('_', '-')} is required")
 
     # Validate claim
-    if not conn.execute("SELECT id FROM healthclaw_claim WHERE id = ?",
-                        (args.claim_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_claim")).select(Field("id")).where(Field("id") == P()).get_sql(), (args.claim_id,)).fetchone():
         err(f"Claim {args.claim_id} not found")
 
     # Validate charge_id if provided
     charge_id = getattr(args, "charge_id", None)
     if charge_id:
-        if not conn.execute("SELECT id FROM healthclaw_charge WHERE id = ?",
-                            (charge_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("healthclaw_charge")).select(Field("id")).where(Field("id") == P()).get_sql(), (charge_id,)).fetchone():
             err(f"Charge {charge_id} not found")
 
     allowed_amount = str(round_currency(to_decimal(getattr(args, "allowed_amount", None) or "0.00")))
@@ -356,12 +354,9 @@ def add_payment_posting(conn, args):
 
     pp_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute(
-        """INSERT INTO healthclaw_payment_posting
-           (id, company_id, claim_id, charge_id, patient_id, payer_name,
-            posting_date, allowed_amount, paid_amount, adjustment,
-            patient_responsibility, payment_method, check_number, notes, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+    sql, _ = insert_row("healthclaw_payment_posting", {"id": P(), "company_id": P(), "claim_id": P(), "charge_id": P(), "patient_id": P(), "payer_name": P(), "posting_date": P(), "allowed_amount": P(), "paid_amount": P(), "adjustment": P(), "patient_responsibility": P(), "payment_method": P(), "check_number": P(), "notes": P(), "created_at": P()})
+
+    conn.execute(sql,
         (pp_id, args.company_id, args.claim_id, charge_id, args.patient_id,
          args.payer_name, args.posting_date, allowed_amount, paid_amount,
          adjustment, patient_responsibility,

@@ -15,6 +15,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row
 
     # Register naming prefixes
     ENTITY_PREFIXES.setdefault("healthclaw_encounter", "ENC-")
@@ -53,21 +54,21 @@ def _validate_enum(value, valid_values, field_name):
 def _validate_patient(conn, patient_id):
     if not patient_id:
         err("--patient-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_patient WHERE id = ?", (patient_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_patient")).select(Field("id")).where(Field("id") == P()).get_sql(), (patient_id,)).fetchone():
         err(f"Patient {patient_id} not found")
 
 
 def _validate_provider(conn, provider_id):
     if not provider_id:
         err("--provider-id is required")
-    if not conn.execute("SELECT id FROM employee WHERE id = ?", (provider_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (provider_id,)).fetchone():
         err(f"Provider (employee) {provider_id} not found")
 
 
 def _validate_encounter(conn, encounter_id):
     if not encounter_id:
         err("--encounter-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_encounter WHERE id = ?", (encounter_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_encounter")).select(Field("id")).where(Field("id") == P()).get_sql(), (encounter_id,)).fetchone():
         err(f"Encounter {encounter_id} not found")
 
 
@@ -89,7 +90,7 @@ def add_encounter(conn, args):
     # Optional appointment link
     appt_id = getattr(args, "appointment_id", None)
     if appt_id:
-        if not conn.execute("SELECT id FROM healthclaw_appointment WHERE id = ?", (appt_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("healthclaw_appointment")).select(Field("id")).where(Field("id") == P()).get_sql(), (appt_id,)).fetchone():
             err(f"Appointment {appt_id} not found")
 
     enc_id = str(uuid.uuid4())
@@ -164,7 +165,7 @@ def update_encounter(conn, args):
 def get_encounter(conn, args):
     enc_id = getattr(args, "encounter_id", None)
     _validate_encounter(conn, enc_id)
-    row = conn.execute("SELECT * FROM healthclaw_encounter WHERE id = ?", (enc_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_encounter")).select(Table("healthclaw_encounter").star).where(Field("id") == P()).get_sql(), (enc_id,)).fetchone()
     data = row_to_dict(row)
     # Enrich
     pat = conn.execute("SELECT full_name FROM healthclaw_patient WHERE id = ?", (data["patient_id"],)).fetchone()
@@ -173,8 +174,8 @@ def get_encounter(conn, args):
     prov = conn.execute("SELECT full_name FROM employee WHERE id = ?", (data["provider_id"],)).fetchone()
     if prov:
         data["provider_name"] = prov[0]
-    data["diagnosis_count"] = conn.execute("SELECT COUNT(*) FROM healthclaw_diagnosis WHERE encounter_id = ?", (enc_id,)).fetchone()[0]
-    data["prescription_count"] = conn.execute("SELECT COUNT(*) FROM healthclaw_prescription WHERE encounter_id = ?", (enc_id,)).fetchone()[0]
+    data["diagnosis_count"] = conn.execute(Q.from_(Table("healthclaw_diagnosis")).select(fn.Count("*")).where(Field("encounter_id") == P()).get_sql(), (enc_id,)).fetchone()[0]
+    data["prescription_count"] = conn.execute(Q.from_(Table("healthclaw_prescription")).select(fn.Count("*")).where(Field("encounter_id") == P()).get_sql(), (enc_id,)).fetchone()[0]
     ok(data)
 
 
@@ -299,7 +300,7 @@ def update_diagnosis(conn, args):
     dx_id = getattr(args, "diagnosis_id", None)
     if not dx_id:
         err("--diagnosis-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_diagnosis WHERE id = ?", (dx_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_diagnosis")).select(Field("id")).where(Field("id") == P()).get_sql(), (dx_id,)).fetchone():
         err(f"Diagnosis {dx_id} not found")
 
     updates, params, changed = [], [], []
@@ -409,7 +410,7 @@ def update_prescription(conn, args):
     rx_id = getattr(args, "prescription_id", None)
     if not rx_id:
         err("--prescription-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_prescription WHERE id = ?", (rx_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_prescription")).select(Field("id")).where(Field("id") == P()).get_sql(), (rx_id,)).fetchone():
         err(f"Prescription {rx_id} not found")
 
     updates, params, changed = [], [], []
@@ -566,7 +567,7 @@ def update_clinical_note(conn, args):
     note_id = getattr(args, "note_id", None)
     if not note_id:
         err("--note-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_clinical_note WHERE id = ?", (note_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_clinical_note")).select(Field("id")).where(Field("id") == P()).get_sql(), (note_id,)).fetchone():
         err(f"Clinical note {note_id} not found")
 
     updates, params, changed = [], [], []

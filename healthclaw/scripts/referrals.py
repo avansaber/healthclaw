@@ -17,6 +17,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row
 
     # Register HealthClaw naming prefixes (referrals domain)
     ENTITY_PREFIXES.setdefault("healthclaw_referral", "REF-")
@@ -41,14 +42,14 @@ VALID_AUTH_SERVICE_TYPES = ("procedure", "imaging", "medication", "dme", "inpati
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    if not conn.execute("SELECT id FROM company WHERE id = ?", (company_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
 
 def _validate_patient(conn, patient_id):
     if not patient_id:
         err("--patient-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_patient WHERE id = ?", (patient_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_patient")).select(Field("id")).where(Field("id") == P()).get_sql(), (patient_id,)).fetchone():
         err(f"Patient {patient_id} not found")
 
 
@@ -67,7 +68,7 @@ def add_referral(conn, args):
     referring_provider_id = getattr(args, "referring_provider_id", None)
     if not referring_provider_id:
         err("--referring-provider-id is required")
-    if not conn.execute("SELECT id FROM employee WHERE id = ?", (referring_provider_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (referring_provider_id,)).fetchone():
         err(f"Referring provider (employee) {referring_provider_id} not found")
 
     referred_to_provider = getattr(args, "referred_to_provider", None)
@@ -88,36 +89,27 @@ def add_referral(conn, args):
     # Optional FK checks
     encounter_id = getattr(args, "encounter_id", None)
     if encounter_id:
-        if not conn.execute("SELECT id FROM healthclaw_encounter WHERE id = ?", (encounter_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("healthclaw_encounter")).select(Field("id")).where(Field("id") == P()).get_sql(), (encounter_id,)).fetchone():
             err(f"Encounter {encounter_id} not found")
     diagnosis_id = getattr(args, "diagnosis_id", None)
     if diagnosis_id:
-        if not conn.execute("SELECT id FROM healthclaw_diagnosis WHERE id = ?", (diagnosis_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("healthclaw_diagnosis")).select(Field("id")).where(Field("id") == P()).get_sql(), (diagnosis_id,)).fetchone():
             err(f"Diagnosis {diagnosis_id} not found")
     insurance_id = getattr(args, "insurance_id", None)
     if insurance_id:
-        if not conn.execute("SELECT id FROM healthclaw_patient_insurance WHERE id = ?", (insurance_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("healthclaw_patient_insurance")).select(Field("id")).where(Field("id") == P()).get_sql(), (insurance_id,)).fetchone():
             err(f"Insurance {insurance_id} not found")
     prior_auth_id = getattr(args, "prior_auth_id", None)
     if prior_auth_id:
-        if not conn.execute("SELECT id FROM healthclaw_prior_auth WHERE id = ?", (prior_auth_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("healthclaw_prior_auth")).select(Field("id")).where(Field("id") == P()).get_sql(), (prior_auth_id,)).fetchone():
             err(f"Prior auth {prior_auth_id} not found")
 
     ref_id = str(uuid.uuid4())
     naming = get_next_name(conn, "healthclaw_referral", company_id=args.company_id)
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_referral (
-            id, naming_series, patient_id, encounter_id,
-            referring_provider_id, referred_to_provider,
-            referred_to_specialty, referred_to_facility,
-            referred_to_phone, referred_to_fax,
-            referral_date, expiration_date, reason,
-            diagnosis_id, priority, insurance_id,
-            prior_auth_required, prior_auth_id,
-            status, notes, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_referral", {"id": P(), "naming_series": P(), "patient_id": P(), "encounter_id": P(), "referring_provider_id": P(), "referred_to_provider": P(), "referred_to_specialty": P(), "referred_to_facility": P(), "referred_to_phone": P(), "referred_to_fax": P(), "referral_date": P(), "expiration_date": P(), "reason": P(), "diagnosis_id": P(), "priority": P(), "insurance_id": P(), "prior_auth_required": P(), "prior_auth_id": P(), "status": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql, (
         ref_id, naming, args.patient_id, encounter_id,
         referring_provider_id, referred_to_provider,
         getattr(args, "referred_to_specialty", None),
@@ -146,7 +138,7 @@ def update_referral(conn, args):
     ref_id = getattr(args, "referral_id", None)
     if not ref_id:
         err("--referral-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_referral WHERE id = ?", (ref_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_referral")).select(Field("id")).where(Field("id") == P()).get_sql(), (ref_id,)).fetchone():
         err(f"Referral {ref_id} not found")
 
     updates, params, changed = [], [], []
@@ -184,7 +176,7 @@ def update_referral(conn, args):
     # Optional FK updates
     diagnosis_id = getattr(args, "diagnosis_id", None)
     if diagnosis_id is not None:
-        if not conn.execute("SELECT id FROM healthclaw_diagnosis WHERE id = ?", (diagnosis_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("healthclaw_diagnosis")).select(Field("id")).where(Field("id") == P()).get_sql(), (diagnosis_id,)).fetchone():
             err(f"Diagnosis {diagnosis_id} not found")
         updates.append("diagnosis_id = ?")
         params.append(diagnosis_id)
@@ -192,7 +184,7 @@ def update_referral(conn, args):
 
     insurance_id = getattr(args, "insurance_id", None)
     if insurance_id is not None:
-        if not conn.execute("SELECT id FROM healthclaw_patient_insurance WHERE id = ?", (insurance_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("healthclaw_patient_insurance")).select(Field("id")).where(Field("id") == P()).get_sql(), (insurance_id,)).fetchone():
             err(f"Insurance {insurance_id} not found")
         updates.append("insurance_id = ?")
         params.append(insurance_id)
@@ -200,7 +192,7 @@ def update_referral(conn, args):
 
     prior_auth_id = getattr(args, "prior_auth_id", None)
     if prior_auth_id is not None:
-        if not conn.execute("SELECT id FROM healthclaw_prior_auth WHERE id = ?", (prior_auth_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("healthclaw_prior_auth")).select(Field("id")).where(Field("id") == P()).get_sql(), (prior_auth_id,)).fetchone():
             err(f"Prior auth {prior_auth_id} not found")
         updates.append("prior_auth_id = ?")
         params.append(prior_auth_id)
@@ -229,7 +221,7 @@ def get_referral(conn, args):
     ref_id = getattr(args, "referral_id", None)
     if not ref_id:
         err("--referral-id is required")
-    row = conn.execute("SELECT * FROM healthclaw_referral WHERE id = ?", (ref_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_referral")).select(Table("healthclaw_referral").star).where(Field("id") == P()).get_sql(), (ref_id,)).fetchone()
     if not row:
         err(f"Referral {ref_id} not found")
     data = row_to_dict(row)
@@ -258,27 +250,53 @@ def get_referral(conn, args):
 # 4. list-referrals
 # ---------------------------------------------------------------------------
 def list_referrals(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_referral")
+
+    q_count = Q.from_(t).select(fn.Count("*"))
+
+    q_rows = Q.from_(t).select(t.star)
+
+    params = []
+
+
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?")
+
+        q_count = q_count.where(t.patient_id == P())
+
+        q_rows = q_rows.where(t.patient_id == P())
+
         params.append(args.patient_id)
+
     if getattr(args, "status", None):
-        where.append("status = ?")
+
+        q_count = q_count.where(t.status == P())
+
+        q_rows = q_rows.where(t.status == P())
+
         params.append(args.status)
+
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+
+        q_count = q_count.where(t.company_id == P())
+
+        q_rows = q_rows.where(t.company_id == P())
+
         params.append(args.company_id)
+
     if getattr(args, "referring_provider_id", None):
-        where.append("referring_provider_id = ?")
+
+        q_count = q_count.where(t.referring_provider_id == P())
+
+        q_rows = q_rows.where(t.referring_provider_id == P())
+
         params.append(args.referring_provider_id)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_referral WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_referral WHERE {where_sql} ORDER BY referral_date DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+
+    q_rows = q_rows.orderby(t.referral_date, order=Order.desc).limit(P()).offset(P())
+
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -296,13 +314,13 @@ def add_prior_auth(conn, args):
     insurance_id = getattr(args, "insurance_id", None)
     if not insurance_id:
         err("--insurance-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_patient_insurance WHERE id = ?", (insurance_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_patient_insurance")).select(Field("id")).where(Field("id") == P()).get_sql(), (insurance_id,)).fetchone():
         err(f"Insurance {insurance_id} not found")
 
     requesting_provider_id = getattr(args, "requesting_provider_id", None)
     if not requesting_provider_id:
         err("--requesting-provider-id is required")
-    if not conn.execute("SELECT id FROM employee WHERE id = ?", (requesting_provider_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (requesting_provider_id,)).fetchone():
         err(f"Requesting provider (employee) {requesting_provider_id} not found")
 
     service_type = getattr(args, "service_type", None)
@@ -321,17 +339,9 @@ def add_prior_auth(conn, args):
     auth_id = str(uuid.uuid4())
     naming = get_next_name(conn, "healthclaw_prior_auth", company_id=args.company_id)
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_prior_auth (
-            id, naming_series, patient_id, insurance_id,
-            requesting_provider_id, auth_number, service_type,
-            cpt_codes, icd10_codes, description,
-            units_requested, units_approved,
-            request_date, effective_date, expiration_date,
-            decision_date, status, denial_reason, appeal_deadline,
-            notes, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_prior_auth", {"id": P(), "naming_series": P(), "patient_id": P(), "insurance_id": P(), "requesting_provider_id": P(), "auth_number": P(), "service_type": P(), "cpt_codes": P(), "icd10_codes": P(), "description": P(), "units_requested": P(), "units_approved": P(), "request_date": P(), "effective_date": P(), "expiration_date": P(), "decision_date": P(), "status": P(), "denial_reason": P(), "appeal_deadline": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql, (
         auth_id, naming, args.patient_id, insurance_id,
         requesting_provider_id,
         getattr(args, "auth_number", None),
@@ -362,7 +372,7 @@ def update_prior_auth(conn, args):
     auth_id = getattr(args, "prior_auth_id", None)
     if not auth_id:
         err("--prior-auth-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_prior_auth WHERE id = ?", (auth_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_prior_auth")).select(Field("id")).where(Field("id") == P()).get_sql(), (auth_id,)).fetchone():
         err(f"Prior auth {auth_id} not found")
 
     updates, params, changed = [], [], []
@@ -428,7 +438,7 @@ def get_prior_auth(conn, args):
     auth_id = getattr(args, "prior_auth_id", None)
     if not auth_id:
         err("--prior-auth-id is required")
-    row = conn.execute("SELECT * FROM healthclaw_prior_auth WHERE id = ?", (auth_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_prior_auth")).select(Table("healthclaw_prior_auth").star).where(Field("id") == P()).get_sql(), (auth_id,)).fetchone()
     if not row:
         err(f"Prior auth {auth_id} not found")
     data = row_to_dict(row)
@@ -459,27 +469,53 @@ def get_prior_auth(conn, args):
 # 8. list-prior-auths
 # ---------------------------------------------------------------------------
 def list_prior_auths(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_prior_auth")
+
+    q_count = Q.from_(t).select(fn.Count("*"))
+
+    q_rows = Q.from_(t).select(t.star)
+
+    params = []
+
+
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?")
+
+        q_count = q_count.where(t.patient_id == P())
+
+        q_rows = q_rows.where(t.patient_id == P())
+
         params.append(args.patient_id)
+
     if getattr(args, "status", None):
-        where.append("status = ?")
+
+        q_count = q_count.where(t.status == P())
+
+        q_rows = q_rows.where(t.status == P())
+
         params.append(args.status)
+
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+
+        q_count = q_count.where(t.company_id == P())
+
+        q_rows = q_rows.where(t.company_id == P())
+
         params.append(args.company_id)
+
     if getattr(args, "insurance_id", None):
-        where.append("insurance_id = ?")
+
+        q_count = q_count.where(t.insurance_id == P())
+
+        q_rows = q_rows.where(t.insurance_id == P())
+
         params.append(args.insurance_id)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_prior_auth WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_prior_auth WHERE {where_sql} ORDER BY request_date DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+
+    q_rows = q_rows.orderby(t.request_date, order=Order.desc).limit(P()).offset(P())
+
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -494,7 +530,7 @@ def add_auth_usage(conn, args):
     prior_auth_id = getattr(args, "prior_auth_id", None)
     if not prior_auth_id:
         err("--prior-auth-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_prior_auth WHERE id = ?", (prior_auth_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_prior_auth")).select(Field("id")).where(Field("id") == P()).get_sql(), (prior_auth_id,)).fetchone():
         err(f"Prior auth {prior_auth_id} not found")
 
     usage_date = getattr(args, "usage_date", None)
@@ -504,21 +540,18 @@ def add_auth_usage(conn, args):
     # Optional FK checks
     encounter_id = getattr(args, "encounter_id", None)
     if encounter_id:
-        if not conn.execute("SELECT id FROM healthclaw_encounter WHERE id = ?", (encounter_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("healthclaw_encounter")).select(Field("id")).where(Field("id") == P()).get_sql(), (encounter_id,)).fetchone():
             err(f"Encounter {encounter_id} not found")
     claim_id = getattr(args, "claim_id", None)
     if claim_id:
-        if not conn.execute("SELECT id FROM healthclaw_claim WHERE id = ?", (claim_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("healthclaw_claim")).select(Field("id")).where(Field("id") == P()).get_sql(), (claim_id,)).fetchone():
             err(f"Claim {claim_id} not found")
 
     au_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_auth_usage (
-            id, prior_auth_id, encounter_id, claim_id,
-            usage_date, units_used, notes, created_at
-        ) VALUES (?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_auth_usage", {"id": P(), "prior_auth_id": P(), "encounter_id": P(), "claim_id": P(), "usage_date": P(), "units_used": P(), "notes": P(), "created_at": P()})
+
+    conn.execute(sql, (
         au_id, prior_auth_id, encounter_id, claim_id,
         usage_date,
         int(getattr(args, "units_used", None) or 1),
@@ -534,24 +567,45 @@ def add_auth_usage(conn, args):
 # 10. list-auth-usages
 # ---------------------------------------------------------------------------
 def list_auth_usages(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_auth_usage")
+
+    q_count = Q.from_(t).select(fn.Count("*"))
+
+    q_rows = Q.from_(t).select(t.star)
+
+    params = []
+
+
     if getattr(args, "prior_auth_id", None):
-        where.append("prior_auth_id = ?")
+
+        q_count = q_count.where(t.prior_auth_id == P())
+
+        q_rows = q_rows.where(t.prior_auth_id == P())
+
         params.append(args.prior_auth_id)
+
     if getattr(args, "encounter_id", None):
-        where.append("encounter_id = ?")
+
+        q_count = q_count.where(t.encounter_id == P())
+
+        q_rows = q_rows.where(t.encounter_id == P())
+
         params.append(args.encounter_id)
+
     if getattr(args, "claim_id", None):
-        where.append("claim_id = ?")
+
+        q_count = q_count.where(t.claim_id == P())
+
+        q_rows = q_rows.where(t.claim_id == P())
+
         params.append(args.claim_id)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_auth_usage WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_auth_usage WHERE {where_sql} ORDER BY usage_date DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+
+    q_rows = q_rows.orderby(t.usage_date, order=Order.desc).limit(P()).offset(P())
+
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,

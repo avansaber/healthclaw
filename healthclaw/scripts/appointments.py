@@ -15,6 +15,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row
 
     # Register naming prefixes
     ENTITY_PREFIXES.setdefault("healthclaw_appointment", "APPT-")
@@ -41,21 +42,21 @@ def _validate_enum(value, valid_values, field_name):
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    if not conn.execute("SELECT id FROM company WHERE id = ?", (company_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
 
 def _validate_patient(conn, patient_id):
     if not patient_id:
         err("--patient-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_patient WHERE id = ?", (patient_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_patient")).select(Field("id")).where(Field("id") == P()).get_sql(), (patient_id,)).fetchone():
         err(f"Patient {patient_id} not found")
 
 
 def _validate_provider(conn, provider_id):
     if not provider_id:
         err("--provider-id is required")
-    if not conn.execute("SELECT id FROM employee WHERE id = ?", (provider_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (provider_id,)).fetchone():
         err(f"Provider (employee) {provider_id} not found")
 
 
@@ -104,7 +105,7 @@ def update_provider_schedule(conn, args):
     sched_id = getattr(args, "schedule_id", None)
     if not sched_id:
         err("--schedule-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_provider_schedule WHERE id = ?", (sched_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_provider_schedule")).select(Field("id")).where(Field("id") == P()).get_sql(), (sched_id,)).fetchone():
         err(f"Schedule {sched_id} not found")
 
     updates, params, changed = [], [], []
@@ -259,7 +260,7 @@ def update_appointment(conn, args):
     appt_id = getattr(args, "appointment_id", None)
     if not appt_id:
         err("--appointment-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_appointment WHERE id = ?", (appt_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_appointment")).select(Field("id")).where(Field("id") == P()).get_sql(), (appt_id,)).fetchone():
         err(f"Appointment {appt_id} not found")
 
     updates, params, changed = [], [], []
@@ -306,7 +307,7 @@ def get_appointment(conn, args):
     appt_id = getattr(args, "appointment_id", None)
     if not appt_id:
         err("--appointment-id is required")
-    row = conn.execute("SELECT * FROM healthclaw_appointment WHERE id = ?", (appt_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_appointment")).select(Table("healthclaw_appointment").star).where(Field("id") == P()).get_sql(), (appt_id,)).fetchone()
     if not row:
         err(f"Appointment {appt_id} not found")
     data = row_to_dict(row)
@@ -364,7 +365,7 @@ def check_in_appointment(conn, args):
     appt_id = getattr(args, "appointment_id", None)
     if not appt_id:
         err("--appointment-id is required")
-    row = conn.execute("SELECT status FROM healthclaw_appointment WHERE id = ?", (appt_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_appointment")).select(Field("status")).where(Field("id") == P()).get_sql(), (appt_id,)).fetchone()
     if not row:
         err(f"Appointment {appt_id} not found")
     if row[0] not in ("scheduled", "confirmed"):
@@ -387,7 +388,7 @@ def check_out_appointment(conn, args):
     appt_id = getattr(args, "appointment_id", None)
     if not appt_id:
         err("--appointment-id is required")
-    row = conn.execute("SELECT status FROM healthclaw_appointment WHERE id = ?", (appt_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_appointment")).select(Field("status")).where(Field("id") == P()).get_sql(), (appt_id,)).fetchone()
     if not row:
         err(f"Appointment {appt_id} not found")
     if row[0] not in ("checked_in", "in_progress"):
@@ -410,7 +411,7 @@ def cancel_appointment(conn, args):
     appt_id = getattr(args, "appointment_id", None)
     if not appt_id:
         err("--appointment-id is required")
-    row = conn.execute("SELECT status FROM healthclaw_appointment WHERE id = ?", (appt_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_appointment")).select(Field("status")).where(Field("id") == P()).get_sql(), (appt_id,)).fetchone()
     if not row:
         err(f"Appointment {appt_id} not found")
     if row[0] in ("completed", "cancelled"):

@@ -15,6 +15,7 @@ try:
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
 except ImportError:
     pass
 
@@ -76,12 +77,16 @@ def add_tooth_chart_entry(conn, args):
         err("--noted-date is required")
 
     # Validate patient exists
-    if not conn.execute("SELECT id FROM healthclaw_patient WHERE id = ?", (args.patient_id,)).fetchone():
+    t_pat = Table("healthclaw_patient")
+    q = Q.from_(t_pat).select(t_pat.id).where(t_pat.id == P())
+    if not conn.execute(q.get_sql(), (args.patient_id,)).fetchone():
         err(f"Patient {args.patient_id} not found")
 
     noted_by_id = getattr(args, "noted_by_id", None)
     if noted_by_id:
-        if not conn.execute("SELECT id FROM employee WHERE id = ?", (noted_by_id,)).fetchone():
+        t_emp = Table("employee")
+        q = Q.from_(t_emp).select(t_emp.id).where(t_emp.id == P())
+        if not conn.execute(q.get_sql(), (noted_by_id,)).fetchone():
             err(f"Employee {noted_by_id} not found")
 
     _validate_tooth_number(args.tooth_number)
@@ -94,16 +99,18 @@ def add_tooth_chart_entry(conn, args):
 
     entry_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute(
-        """INSERT INTO healthclaw_tooth_chart
-           (id, patient_id, company_id, tooth_number, tooth_system, surface, condition,
-            condition_detail, noted_date, noted_by_id, status, notes, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)""",
-        (entry_id, args.patient_id, args.company_id, args.tooth_number, tooth_system,
-         surface, args.condition, getattr(args, "condition_detail", None),
-         args.noted_date, getattr(args, "noted_by_id", None),
-         getattr(args, "notes", None), now, now)
-    )
+    sql, _ = insert_row("healthclaw_tooth_chart", {
+        "id": P(), "patient_id": P(), "company_id": P(), "tooth_number": P(),
+        "tooth_system": P(), "surface": P(), "condition": P(),
+        "condition_detail": P(), "noted_date": P(), "noted_by_id": P(),
+        "status": P(), "notes": P(), "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(sql, (
+        entry_id, args.patient_id, args.company_id, args.tooth_number, tooth_system,
+        surface, args.condition, getattr(args, "condition_detail", None),
+        args.noted_date, getattr(args, "noted_by_id", None),
+        "active", getattr(args, "notes", None), now, now,
+    ))
     audit(conn, "healthclaw_tooth_chart", entry_id, "dental-add-tooth-chart-entry", args.company_id)
     conn.commit()
     ok({"id": entry_id, "tooth_number": args.tooth_number, "condition": args.condition})
@@ -116,7 +123,9 @@ def update_tooth_chart_entry(conn, args):
     entry_id = getattr(args, "tooth_chart_id", None)
     if not entry_id:
         err("--tooth-chart-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_tooth_chart WHERE id = ?", (entry_id,)).fetchone():
+    t = Table("healthclaw_tooth_chart")
+    q = Q.from_(t).select(t.id).where(t.id == P())
+    if not conn.execute(q.get_sql(), (entry_id,)).fetchone():
         err(f"Tooth chart entry {entry_id} not found")
 
     updates, params, changed = [], [], []
@@ -151,8 +160,13 @@ def get_tooth_chart(conn, args):
     patient_id = getattr(args, "patient_id", None)
     if not patient_id:
         err("--patient-id is required")
+    t = Table("healthclaw_tooth_chart")
+    q = (Q.from_(t).select(t.star)
+         .where(t.patient_id == P())
+         .where(t.status == "active")
+         .orderby(Field("CAST(tooth_number AS INTEGER)")))
     rows = conn.execute(
-        "SELECT * FROM healthclaw_tooth_chart WHERE patient_id = ? AND status = 'active' ORDER BY CAST(tooth_number AS INTEGER)",
+        "SELECT * FROM \"healthclaw_tooth_chart\" WHERE \"patient_id\"=? AND \"status\"='active' ORDER BY CAST(tooth_number AS INTEGER)",
         (patient_id,)
     ).fetchall()
     chart = {}
@@ -174,13 +188,19 @@ def add_dental_procedure(conn, args):
             err(f"--{req.replace('_', '-')} is required")
 
     # Validate encounter exists
-    if not conn.execute("SELECT id FROM healthclaw_encounter WHERE id = ?", (args.encounter_id,)).fetchone():
+    t_enc = Table("healthclaw_encounter")
+    q = Q.from_(t_enc).select(t_enc.id).where(t_enc.id == P())
+    if not conn.execute(q.get_sql(), (args.encounter_id,)).fetchone():
         err(f"Encounter {args.encounter_id} not found")
     # Validate patient exists
-    if not conn.execute("SELECT id FROM healthclaw_patient WHERE id = ?", (args.patient_id,)).fetchone():
+    t_pat = Table("healthclaw_patient")
+    q = Q.from_(t_pat).select(t_pat.id).where(t_pat.id == P())
+    if not conn.execute(q.get_sql(), (args.patient_id,)).fetchone():
         err(f"Patient {args.patient_id} not found")
     # Validate provider exists
-    if not conn.execute("SELECT id FROM employee WHERE id = ?", (args.provider_id,)).fetchone():
+    t_emp = Table("employee")
+    q = Q.from_(t_emp).select(t_emp.id).where(t_emp.id == P())
+    if not conn.execute(q.get_sql(), (args.provider_id,)).fetchone():
         err(f"Provider {args.provider_id} not found")
 
     tooth_number = getattr(args, "tooth_number", None)
@@ -197,16 +217,19 @@ def add_dental_procedure(conn, args):
 
     proc_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute(
-        """INSERT INTO healthclaw_dental_procedure
-           (id, encounter_id, patient_id, company_id, provider_id, cdt_code, cdt_description,
-            tooth_number, surface, quadrant, procedure_date, fee, status, notes, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?, ?, ?)""",
-        (proc_id, args.encounter_id, args.patient_id, args.company_id, args.provider_id,
-         args.cdt_code, getattr(args, "cdt_description", None),
-         tooth_number, surface, quadrant, args.procedure_date, fee,
-         getattr(args, "notes", None), now, now)
-    )
+    sql, _ = insert_row("healthclaw_dental_procedure", {
+        "id": P(), "encounter_id": P(), "patient_id": P(), "company_id": P(),
+        "provider_id": P(), "cdt_code": P(), "cdt_description": P(),
+        "tooth_number": P(), "surface": P(), "quadrant": P(),
+        "procedure_date": P(), "fee": P(), "status": P(),
+        "notes": P(), "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(sql, (
+        proc_id, args.encounter_id, args.patient_id, args.company_id, args.provider_id,
+        args.cdt_code, getattr(args, "cdt_description", None),
+        tooth_number, surface, quadrant, args.procedure_date, fee, "planned",
+        getattr(args, "notes", None), now, now,
+    ))
     audit(conn, "healthclaw_dental_procedure", proc_id, "dental-add-dental-procedure", args.company_id)
     conn.commit()
     ok({"id": proc_id, "cdt_code": args.cdt_code, "fee": fee})
@@ -216,25 +239,37 @@ def add_dental_procedure(conn, args):
 # 5. list-dental-procedures
 # ---------------------------------------------------------------------------
 def list_dental_procedures(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_dental_procedure")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "encounter_id", None):
-        where.append("encounter_id = ?"); params.append(args.encounter_id)
+        q_count = q_count.where(t.encounter_id == P())
+        q_rows = q_rows.where(t.encounter_id == P())
+        params.append(args.encounter_id)
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?"); params.append(args.patient_id)
+        q_count = q_count.where(t.patient_id == P())
+        q_rows = q_rows.where(t.patient_id == P())
+        params.append(args.patient_id)
     if getattr(args, "cdt_code", None):
-        where.append("cdt_code = ?"); params.append(args.cdt_code)
+        q_count = q_count.where(t.cdt_code == P())
+        q_rows = q_rows.where(t.cdt_code == P())
+        params.append(args.cdt_code)
     if getattr(args, "status", None):
-        where.append("status = ?"); params.append(args.status)
+        q_count = q_count.where(t.status == P())
+        q_rows = q_rows.where(t.status == P())
+        params.append(args.status)
     if getattr(args, "search", None):
-        where.append("(cdt_code LIKE ? OR cdt_description LIKE ? OR notes LIKE ?)")
         s = f"%{args.search}%"
+        search_crit = (t.cdt_code.like(P())) | (t.cdt_description.like(P())) | (t.notes.like(P()))
+        q_count = q_count.where(search_crit)
+        q_rows = q_rows.where(search_crit)
         params.extend([s, s, s])
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_dental_procedure WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_dental_procedure WHERE {where_sql} ORDER BY procedure_date DESC LIMIT ? OFFSET ?", params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.procedure_date, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": args.limit, "offset": args.offset, "has_more": (args.offset + args.limit) < total})
 
@@ -247,9 +282,13 @@ def add_treatment_plan(conn, args):
         if not getattr(args, req, None):
             err(f"--{req.replace('_', '-')} is required")
 
-    if not conn.execute("SELECT id FROM healthclaw_patient WHERE id = ?", (args.patient_id,)).fetchone():
+    t_pat = Table("healthclaw_patient")
+    q = Q.from_(t_pat).select(t_pat.id).where(t_pat.id == P())
+    if not conn.execute(q.get_sql(), (args.patient_id,)).fetchone():
         err(f"Patient {args.patient_id} not found")
-    if not conn.execute("SELECT id FROM employee WHERE id = ?", (args.provider_id,)).fetchone():
+    t_emp = Table("employee")
+    q = Q.from_(t_emp).select(t_emp.id).where(t_emp.id == P())
+    if not conn.execute(q.get_sql(), (args.provider_id,)).fetchone():
         err(f"Provider {args.provider_id} not found")
 
     phases = getattr(args, "phases", None) or "[]"
@@ -265,15 +304,17 @@ def add_treatment_plan(conn, args):
 
     plan_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute(
-        """INSERT INTO healthclaw_treatment_plan
-           (id, patient_id, company_id, provider_id, plan_name, plan_date, phases,
-            estimated_total, insurance_estimate, patient_estimate, status, notes, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?, ?)""",
-        (plan_id, args.patient_id, args.company_id, args.provider_id, args.plan_name,
-         args.plan_date, phases, estimated_total, insurance_estimate, patient_estimate,
-         getattr(args, "notes", None), now, now)
-    )
+    sql, _ = insert_row("healthclaw_treatment_plan", {
+        "id": P(), "patient_id": P(), "company_id": P(), "provider_id": P(),
+        "plan_name": P(), "plan_date": P(), "phases": P(),
+        "estimated_total": P(), "insurance_estimate": P(), "patient_estimate": P(),
+        "status": P(), "notes": P(), "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(sql, (
+        plan_id, args.patient_id, args.company_id, args.provider_id, args.plan_name,
+        args.plan_date, phases, estimated_total, insurance_estimate, patient_estimate,
+        "proposed", getattr(args, "notes", None), now, now,
+    ))
     audit(conn, "healthclaw_treatment_plan", plan_id, "dental-add-treatment-plan", args.company_id)
     conn.commit()
     ok({"id": plan_id, "plan_name": args.plan_name, "estimated_total": estimated_total})
@@ -286,7 +327,9 @@ def update_treatment_plan(conn, args):
     plan_id = getattr(args, "treatment_plan_id", None)
     if not plan_id:
         err("--treatment-plan-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_treatment_plan WHERE id = ?", (plan_id,)).fetchone():
+    t = Table("healthclaw_treatment_plan")
+    q = Q.from_(t).select(t.id).where(t.id == P())
+    if not conn.execute(q.get_sql(), (plan_id,)).fetchone():
         err(f"Treatment plan {plan_id} not found")
 
     updates, params, changed = [], [], []
@@ -331,21 +374,29 @@ def update_treatment_plan(conn, args):
 # 8. list-treatment-plans
 # ---------------------------------------------------------------------------
 def list_treatment_plans(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_treatment_plan")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?"); params.append(args.patient_id)
+        q_count = q_count.where(t.patient_id == P())
+        q_rows = q_rows.where(t.patient_id == P())
+        params.append(args.patient_id)
     if getattr(args, "status", None):
-        where.append("status = ?"); params.append(args.status)
+        q_count = q_count.where(t.status == P())
+        q_rows = q_rows.where(t.status == P())
+        params.append(args.status)
     if getattr(args, "search", None):
-        where.append("(plan_name LIKE ? OR notes LIKE ?)")
         s = f"%{args.search}%"
+        search_crit = (t.plan_name.like(P())) | (t.notes.like(P()))
+        q_count = q_count.where(search_crit)
+        q_rows = q_rows.where(search_crit)
         params.extend([s, s])
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_treatment_plan WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_treatment_plan WHERE {where_sql} ORDER BY plan_date DESC LIMIT ? OFFSET ?", params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.plan_date, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": args.limit, "offset": args.offset, "has_more": (args.offset + args.limit) < total})
 
@@ -358,9 +409,13 @@ def add_perio_exam(conn, args):
         if not getattr(args, req, None):
             err(f"--{req.replace('_', '-')} is required")
 
-    if not conn.execute("SELECT id FROM healthclaw_patient WHERE id = ?", (args.patient_id,)).fetchone():
+    t_pat = Table("healthclaw_patient")
+    q = Q.from_(t_pat).select(t_pat.id).where(t_pat.id == P())
+    if not conn.execute(q.get_sql(), (args.patient_id,)).fetchone():
         err(f"Patient {args.patient_id} not found")
-    if not conn.execute("SELECT id FROM employee WHERE id = ?", (args.provider_id,)).fetchone():
+    t_emp = Table("employee")
+    q = Q.from_(t_emp).select(t_emp.id).where(t_emp.id == P())
+    if not conn.execute(q.get_sql(), (args.provider_id,)).fetchone():
         err(f"Provider {args.provider_id} not found")
 
     measurements = getattr(args, "measurements", None) or "{}"
@@ -377,17 +432,20 @@ def add_perio_exam(conn, args):
 
     exam_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute(
-        """INSERT INTO healthclaw_perio_exam
-           (id, patient_id, company_id, provider_id, exam_date, measurements, bleeding_sites,
-            furcation_data, mobility_data, recession_data, plaque_score, notes, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'complete', ?, ?)""",
-        (exam_id, args.patient_id, args.company_id, args.provider_id, args.exam_date,
-         measurements, bleeding_sites,
-         getattr(args, "furcation_data", None) or "{}", getattr(args, "mobility_data", None) or "{}",
-         getattr(args, "recession_data", None) or "{}", getattr(args, "plaque_score", None),
-         getattr(args, "notes", None), now, now)
-    )
+    sql, _ = insert_row("healthclaw_perio_exam", {
+        "id": P(), "patient_id": P(), "company_id": P(), "provider_id": P(),
+        "exam_date": P(), "measurements": P(), "bleeding_sites": P(),
+        "furcation_data": P(), "mobility_data": P(), "recession_data": P(),
+        "plaque_score": P(), "notes": P(), "status": P(),
+        "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(sql, (
+        exam_id, args.patient_id, args.company_id, args.provider_id, args.exam_date,
+        measurements, bleeding_sites,
+        getattr(args, "furcation_data", None) or "{}", getattr(args, "mobility_data", None) or "{}",
+        getattr(args, "recession_data", None) or "{}", getattr(args, "plaque_score", None),
+        getattr(args, "notes", None), "complete", now, now,
+    ))
     audit(conn, "healthclaw_perio_exam", exam_id, "dental-add-perio-exam", args.company_id)
     conn.commit()
     ok({"id": exam_id, "exam_date": args.exam_date})
@@ -400,7 +458,9 @@ def get_perio_exam(conn, args):
     exam_id = getattr(args, "perio_exam_id", None)
     if not exam_id:
         err("--perio-exam-id is required")
-    row = conn.execute("SELECT * FROM healthclaw_perio_exam WHERE id = ?", (exam_id,)).fetchone()
+    t = Table("healthclaw_perio_exam")
+    q = Q.from_(t).select(t.star).where(t.id == P())
+    row = conn.execute(q.get_sql(), (exam_id,)).fetchone()
     if not row:
         err(f"Perio exam {exam_id} not found")
     data = row_to_dict(row)
@@ -418,15 +478,19 @@ def get_perio_exam(conn, args):
 # 11. list-perio-exams
 # ---------------------------------------------------------------------------
 def list_perio_exams(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_perio_exam")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?"); params.append(args.patient_id)
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_perio_exam WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_perio_exam WHERE {where_sql} ORDER BY exam_date DESC LIMIT ? OFFSET ?", params
-    ).fetchall()
+        q_count = q_count.where(t.patient_id == P())
+        q_rows = q_rows.where(t.patient_id == P())
+        params.append(args.patient_id)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.exam_date, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": args.limit, "offset": args.offset, "has_more": (args.offset + args.limit) < total})
 
@@ -440,8 +504,10 @@ def compare_perio_exams(conn, args):
     if not exam_id_1 or not exam_id_2:
         err("--exam-id-1 and --exam-id-2 are required")
 
-    row1 = conn.execute("SELECT * FROM healthclaw_perio_exam WHERE id = ?", (exam_id_1,)).fetchone()
-    row2 = conn.execute("SELECT * FROM healthclaw_perio_exam WHERE id = ?", (exam_id_2,)).fetchone()
+    t = Table("healthclaw_perio_exam")
+    q = Q.from_(t).select(t.star).where(t.id == P())
+    row1 = conn.execute(q.get_sql(), (exam_id_1,)).fetchone()
+    row2 = conn.execute(q.get_sql(), (exam_id_2,)).fetchone()
     if not row1:
         err(f"Perio exam {exam_id_1} not found")
     if not row2:

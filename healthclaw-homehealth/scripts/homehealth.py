@@ -15,6 +15,7 @@ try:
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
 except ImportError:
     pass
 
@@ -55,11 +56,15 @@ def add_home_visit(conn, args):
             err(f"--{req.replace('_', '-')} is required")
 
     # Validate patient exists
-    if not conn.execute("SELECT id FROM healthclaw_patient WHERE id = ?", (args.patient_id,)).fetchone():
+    t_pat = Table("healthclaw_patient")
+    q = Q.from_(t_pat).select(t_pat.id).where(t_pat.id == P())
+    if not conn.execute(q.get_sql(), (args.patient_id,)).fetchone():
         err(f"Patient {args.patient_id} not found")
 
     # Validate clinician (employee) exists
-    if not conn.execute("SELECT id FROM employee WHERE id = ?", (args.clinician_id,)).fetchone():
+    t_emp = Table("employee")
+    q = Q.from_(t_emp).select(t_emp.id).where(t_emp.id == P())
+    if not conn.execute(q.get_sql(), (args.clinician_id,)).fetchone():
         err(f"Clinician {args.clinician_id} not found")
 
     _validate_enum(args.visit_type, VALID_VISIT_TYPES, "visit-type")
@@ -73,18 +78,20 @@ def add_home_visit(conn, args):
 
     visit_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute(
-        """INSERT INTO healthclaw_home_visit
-           (id, company_id, patient_id, clinician_id, visit_date, visit_type,
-            start_time, end_time, travel_time_minutes, mileage, visit_status, notes,
-            created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (visit_id, args.company_id, args.patient_id, args.clinician_id,
-         args.visit_date, args.visit_type,
-         getattr(args, "start_time", None), getattr(args, "end_time", None),
-         getattr(args, "travel_time_minutes", None), mileage,
-         visit_status, getattr(args, "notes", None), now, now)
-    )
+    sql, _ = insert_row("healthclaw_home_visit", {
+        "id": P(), "company_id": P(), "patient_id": P(), "clinician_id": P(),
+        "visit_date": P(), "visit_type": P(),
+        "start_time": P(), "end_time": P(), "travel_time_minutes": P(),
+        "mileage": P(), "visit_status": P(), "notes": P(),
+        "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(sql, (
+        visit_id, args.company_id, args.patient_id, args.clinician_id,
+        args.visit_date, args.visit_type,
+        getattr(args, "start_time", None), getattr(args, "end_time", None),
+        getattr(args, "travel_time_minutes", None), mileage,
+        visit_status, getattr(args, "notes", None), now, now,
+    ))
     audit(conn, "healthclaw_home_visit", visit_id, "homehealth-add-home-visit", args.company_id)
     conn.commit()
     ok({"id": visit_id, "visit_type": args.visit_type, "visit_date": args.visit_date,
@@ -98,7 +105,9 @@ def update_home_visit(conn, args):
     visit_id = getattr(args, "home_visit_id", None)
     if not visit_id:
         err("--home-visit-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_home_visit WHERE id = ?", (visit_id,)).fetchone():
+    t = Table("healthclaw_home_visit")
+    q = Q.from_(t).select(t.id).where(t.id == P())
+    if not conn.execute(q.get_sql(), (visit_id,)).fetchone():
         err(f"Home visit {visit_id} not found")
 
     updates, params, changed = [], [], []
@@ -143,21 +152,31 @@ def update_home_visit(conn, args):
 # 3. list-home-visits
 # ---------------------------------------------------------------------------
 def list_home_visits(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_home_visit")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?"); params.append(args.patient_id)
+        q_count = q_count.where(t.patient_id == P())
+        q_rows = q_rows.where(t.patient_id == P())
+        params.append(args.patient_id)
     if getattr(args, "clinician_id", None):
-        where.append("clinician_id = ?"); params.append(args.clinician_id)
+        q_count = q_count.where(t.clinician_id == P())
+        q_rows = q_rows.where(t.clinician_id == P())
+        params.append(args.clinician_id)
     if getattr(args, "visit_type", None):
-        where.append("visit_type = ?"); params.append(args.visit_type)
+        q_count = q_count.where(t.visit_type == P())
+        q_rows = q_rows.where(t.visit_type == P())
+        params.append(args.visit_type)
     if getattr(args, "visit_status", None):
-        where.append("visit_status = ?"); params.append(args.visit_status)
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_home_visit WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_home_visit WHERE {where_sql} ORDER BY visit_date DESC LIMIT ? OFFSET ?", params
-    ).fetchall()
+        q_count = q_count.where(t.visit_status == P())
+        q_rows = q_rows.where(t.visit_status == P())
+        params.append(args.visit_status)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.visit_date, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": args.limit, "offset": args.offset, "has_more": (args.offset + args.limit) < total})
 
@@ -171,12 +190,16 @@ def add_care_plan(conn, args):
             err(f"--{req.replace('_', '-')} is required")
 
     # Validate patient exists
-    if not conn.execute("SELECT id FROM healthclaw_patient WHERE id = ?", (args.patient_id,)).fetchone():
+    t_pat = Table("healthclaw_patient")
+    q = Q.from_(t_pat).select(t_pat.id).where(t_pat.id == P())
+    if not conn.execute(q.get_sql(), (args.patient_id,)).fetchone():
         err(f"Patient {args.patient_id} not found")
     # Validate certifying physician if provided
     cert_phys = getattr(args, "certifying_physician_id", None)
     if cert_phys:
-        if not conn.execute("SELECT id FROM employee WHERE id = ?", (cert_phys,)).fetchone():
+        t_emp = Table("employee")
+        q = Q.from_(t_emp).select(t_emp.id).where(t_emp.id == P())
+        if not conn.execute(q.get_sql(), (cert_phys,)).fetchone():
             err(f"Physician {cert_phys} not found")
 
     frequency = getattr(args, "frequency", None)
@@ -189,17 +212,18 @@ def add_care_plan(conn, args):
 
     plan_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute(
-        """INSERT INTO healthclaw_care_plan
-           (id, company_id, patient_id, certifying_physician_id,
-            start_of_care, certification_period_start, certification_period_end,
-            frequency, goals, plan_status, notes, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)""",
-        (plan_id, args.company_id, args.patient_id,
-         getattr(args, "certifying_physician_id", None),
-         args.start_of_care, args.certification_period_start, args.certification_period_end,
-         frequency, goals, getattr(args, "notes", None), now, now)
-    )
+    sql, _ = insert_row("healthclaw_care_plan", {
+        "id": P(), "company_id": P(), "patient_id": P(), "certifying_physician_id": P(),
+        "start_of_care": P(), "certification_period_start": P(), "certification_period_end": P(),
+        "frequency": P(), "goals": P(), "plan_status": P(), "notes": P(),
+        "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(sql, (
+        plan_id, args.company_id, args.patient_id,
+        getattr(args, "certifying_physician_id", None),
+        args.start_of_care, args.certification_period_start, args.certification_period_end,
+        frequency, goals, "active", getattr(args, "notes", None), now, now,
+    ))
     audit(conn, "healthclaw_care_plan", plan_id, "homehealth-add-care-plan", args.company_id)
     conn.commit()
     ok({"id": plan_id, "patient_id": args.patient_id, "start_of_care": args.start_of_care,
@@ -213,7 +237,9 @@ def update_care_plan(conn, args):
     plan_id = getattr(args, "care_plan_id", None)
     if not plan_id:
         err("--care-plan-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_care_plan WHERE id = ?", (plan_id,)).fetchone():
+    t = Table("healthclaw_care_plan")
+    q = Q.from_(t).select(t.id).where(t.id == P())
+    if not conn.execute(q.get_sql(), (plan_id,)).fetchone():
         err(f"Care plan {plan_id} not found")
 
     updates, params, changed = [], [], []
@@ -258,7 +284,9 @@ def get_care_plan(conn, args):
     plan_id = getattr(args, "care_plan_id", None)
     if not plan_id:
         err("--care-plan-id is required")
-    row = conn.execute("SELECT * FROM healthclaw_care_plan WHERE id = ?", (plan_id,)).fetchone()
+    t = Table("healthclaw_care_plan")
+    q = Q.from_(t).select(t.star).where(t.id == P())
+    row = conn.execute(q.get_sql(), (plan_id,)).fetchone()
     if not row:
         err(f"Care plan {plan_id} not found")
     data = row_to_dict(row)
@@ -276,17 +304,23 @@ def get_care_plan(conn, args):
 # 7. list-care-plans
 # ---------------------------------------------------------------------------
 def list_care_plans(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_care_plan")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?"); params.append(args.patient_id)
+        q_count = q_count.where(t.patient_id == P())
+        q_rows = q_rows.where(t.patient_id == P())
+        params.append(args.patient_id)
     if getattr(args, "plan_status", None):
-        where.append("plan_status = ?"); params.append(args.plan_status)
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_care_plan WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_care_plan WHERE {where_sql} ORDER BY start_of_care DESC LIMIT ? OFFSET ?", params
-    ).fetchall()
+        q_count = q_count.where(t.plan_status == P())
+        q_rows = q_rows.where(t.plan_status == P())
+        params.append(args.plan_status)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.start_of_care, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": args.limit, "offset": args.offset, "has_more": (args.offset + args.limit) < total})
 
@@ -300,11 +334,15 @@ def add_oasis_assessment(conn, args):
             err(f"--{req.replace('_', '-')} is required")
 
     # Validate patient exists
-    if not conn.execute("SELECT id FROM healthclaw_patient WHERE id = ?", (args.patient_id,)).fetchone():
+    t_pat = Table("healthclaw_patient")
+    q = Q.from_(t_pat).select(t_pat.id).where(t_pat.id == P())
+    if not conn.execute(q.get_sql(), (args.patient_id,)).fetchone():
         err(f"Patient {args.patient_id} not found")
 
     # Validate clinician (employee) exists
-    if not conn.execute("SELECT id FROM employee WHERE id = ?", (args.clinician_id,)).fetchone():
+    t_emp = Table("employee")
+    q = Q.from_(t_emp).select(t_emp.id).where(t_emp.id == P())
+    if not conn.execute(q.get_sql(), (args.clinician_id,)).fetchone():
         err(f"Clinician {args.clinician_id} not found")
 
     _validate_enum(args.assessment_type, VALID_ASSESSMENT_TYPES, "assessment-type")
@@ -315,15 +353,16 @@ def add_oasis_assessment(conn, args):
 
     assessment_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute(
-        """INSERT INTO healthclaw_oasis_assessment
-           (id, company_id, patient_id, clinician_id, assessment_type, assessment_date,
-            m_items, notes, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (assessment_id, args.company_id, args.patient_id, args.clinician_id,
-         args.assessment_type, args.assessment_date,
-         m_items, getattr(args, "notes", None), now, now)
-    )
+    sql, _ = insert_row("healthclaw_oasis_assessment", {
+        "id": P(), "company_id": P(), "patient_id": P(), "clinician_id": P(),
+        "assessment_type": P(), "assessment_date": P(),
+        "m_items": P(), "notes": P(), "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(sql, (
+        assessment_id, args.company_id, args.patient_id, args.clinician_id,
+        args.assessment_type, args.assessment_date,
+        m_items, getattr(args, "notes", None), now, now,
+    ))
     audit(conn, "healthclaw_oasis_assessment", assessment_id, "homehealth-add-oasis-assessment", args.company_id)
     conn.commit()
     ok({"id": assessment_id, "assessment_type": args.assessment_type,
@@ -334,17 +373,23 @@ def add_oasis_assessment(conn, args):
 # 9. list-oasis-assessments
 # ---------------------------------------------------------------------------
 def list_oasis_assessments(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_oasis_assessment")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?"); params.append(args.patient_id)
+        q_count = q_count.where(t.patient_id == P())
+        q_rows = q_rows.where(t.patient_id == P())
+        params.append(args.patient_id)
     if getattr(args, "assessment_type", None):
-        where.append("assessment_type = ?"); params.append(args.assessment_type)
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_oasis_assessment WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_oasis_assessment WHERE {where_sql} ORDER BY assessment_date DESC LIMIT ? OFFSET ?", params
-    ).fetchall()
+        q_count = q_count.where(t.assessment_type == P())
+        q_rows = q_rows.where(t.assessment_type == P())
+        params.append(args.assessment_type)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.assessment_date, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": args.limit, "offset": args.offset, "has_more": (args.offset + args.limit) < total})
 
@@ -358,11 +403,15 @@ def add_aide_assignment(conn, args):
             err(f"--{req.replace('_', '-')} is required")
 
     # Validate patient exists
-    if not conn.execute("SELECT id FROM healthclaw_patient WHERE id = ?", (args.patient_id,)).fetchone():
+    t_pat = Table("healthclaw_patient")
+    q = Q.from_(t_pat).select(t_pat.id).where(t_pat.id == P())
+    if not conn.execute(q.get_sql(), (args.patient_id,)).fetchone():
         err(f"Patient {args.patient_id} not found")
 
     # Validate aide (employee) exists
-    if not conn.execute("SELECT id FROM employee WHERE id = ?", (args.aide_id,)).fetchone():
+    t_emp = Table("employee")
+    q = Q.from_(t_emp).select(t_emp.id).where(t_emp.id == P())
+    if not conn.execute(q.get_sql(), (args.aide_id,)).fetchone():
         err(f"Aide {args.aide_id} not found")
 
     days_of_week = getattr(args, "days_of_week", None)
@@ -375,23 +424,26 @@ def add_aide_assignment(conn, args):
 
     supervisor_id = getattr(args, "supervisor_id", None)
     if supervisor_id:
-        if not conn.execute("SELECT id FROM employee WHERE id = ?", (supervisor_id,)).fetchone():
+        q = Q.from_(t_emp).select(t_emp.id).where(t_emp.id == P())
+        if not conn.execute(q.get_sql(), (supervisor_id,)).fetchone():
             err(f"Supervisor {supervisor_id} not found")
 
     assign_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute(
-        """INSERT INTO healthclaw_aide_assignment
-           (id, company_id, patient_id, aide_id, assignment_start, assignment_end,
-            days_of_week, visit_time, tasks, supervisor_id, supervision_due_date,
-            status, notes, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)""",
-        (assign_id, args.company_id, args.patient_id, args.aide_id,
-         args.assignment_start, getattr(args, "assignment_end", None),
-         days_of_week, getattr(args, "visit_time", None), tasks,
-         supervisor_id, getattr(args, "supervision_due_date", None),
-         getattr(args, "notes", None), now, now)
-    )
+    sql, _ = insert_row("healthclaw_aide_assignment", {
+        "id": P(), "company_id": P(), "patient_id": P(), "aide_id": P(),
+        "assignment_start": P(), "assignment_end": P(),
+        "days_of_week": P(), "visit_time": P(), "tasks": P(),
+        "supervisor_id": P(), "supervision_due_date": P(),
+        "status": P(), "notes": P(), "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(sql, (
+        assign_id, args.company_id, args.patient_id, args.aide_id,
+        args.assignment_start, getattr(args, "assignment_end", None),
+        days_of_week, getattr(args, "visit_time", None), tasks,
+        supervisor_id, getattr(args, "supervision_due_date", None),
+        "active", getattr(args, "notes", None), now, now,
+    ))
     audit(conn, "healthclaw_aide_assignment", assign_id, "homehealth-add-aide-assignment", args.company_id)
     conn.commit()
     ok({"id": assign_id, "aide_id": args.aide_id, "assignment_start": args.assignment_start,
@@ -405,7 +457,9 @@ def update_aide_assignment(conn, args):
     assign_id = getattr(args, "aide_assignment_id", None)
     if not assign_id:
         err("--aide-assignment-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_aide_assignment WHERE id = ?", (assign_id,)).fetchone():
+    t = Table("healthclaw_aide_assignment")
+    q = Q.from_(t).select(t.id).where(t.id == P())
+    if not conn.execute(q.get_sql(), (assign_id,)).fetchone():
         err(f"Aide assignment {assign_id} not found")
 
     updates, params, changed = [], [], []
@@ -436,7 +490,9 @@ def update_aide_assignment(conn, args):
 
     supervisor_id = getattr(args, "supervisor_id", None)
     if supervisor_id:
-        if not conn.execute("SELECT id FROM employee WHERE id = ?", (supervisor_id,)).fetchone():
+        t_emp = Table("employee")
+        q = Q.from_(t_emp).select(t_emp.id).where(t_emp.id == P())
+        if not conn.execute(q.get_sql(), (supervisor_id,)).fetchone():
             err(f"Supervisor {supervisor_id} not found")
         updates.append("supervisor_id = ?"); params.append(supervisor_id); changed.append("supervisor_id")
 
@@ -454,19 +510,27 @@ def update_aide_assignment(conn, args):
 # 12. list-aide-assignments
 # ---------------------------------------------------------------------------
 def list_aide_assignments(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_aide_assignment")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?"); params.append(args.patient_id)
+        q_count = q_count.where(t.patient_id == P())
+        q_rows = q_rows.where(t.patient_id == P())
+        params.append(args.patient_id)
     if getattr(args, "aide_id", None):
-        where.append("aide_id = ?"); params.append(args.aide_id)
+        q_count = q_count.where(t.aide_id == P())
+        q_rows = q_rows.where(t.aide_id == P())
+        params.append(args.aide_id)
     if getattr(args, "status", None):
-        where.append("status = ?"); params.append(args.status)
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_aide_assignment WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_aide_assignment WHERE {where_sql} ORDER BY assignment_start DESC LIMIT ? OFFSET ?", params
-    ).fetchall()
+        q_count = q_count.where(t.status == P())
+        q_rows = q_rows.where(t.status == P())
+        params.append(args.status)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.assignment_start, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": args.limit, "offset": args.offset, "has_more": (args.offset + args.limit) < total})
 

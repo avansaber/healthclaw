@@ -19,6 +19,7 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.crypto import encrypt_field as _enc_raw, decrypt_field as _dec_raw, derive_key
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row
 
     # Register HealthClaw naming prefixes (patients domain)
     ENTITY_PREFIXES.setdefault("healthclaw_patient", "PAT-")
@@ -93,7 +94,7 @@ VALID_CONSENT_STATUSES = ("active", "expired", "revoked")
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    row = conn.execute("SELECT id FROM company WHERE id = ?", (company_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone()
     if not row:
         err(f"Company {company_id} not found")
 
@@ -101,7 +102,7 @@ def _validate_company(conn, company_id):
 def _validate_patient(conn, patient_id):
     if not patient_id:
         err("--patient-id is required")
-    row = conn.execute("SELECT id FROM healthclaw_patient WHERE id = ?", (patient_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_patient")).select(Field("id")).where(Field("id") == P()).get_sql(), (patient_id,)).fetchone()
     if not row:
         err(f"Patient {patient_id} not found")
 
@@ -131,7 +132,7 @@ def add_patient(conn, args):
     # Check provider exists if specified
     provider_id = getattr(args, "primary_provider_id", None)
     if provider_id:
-        row = conn.execute("SELECT id FROM employee WHERE id = ?", (provider_id,)).fetchone()
+        row = conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (provider_id,)).fetchone()
         if not row:
             err(f"Provider (employee) {provider_id} not found")
 
@@ -144,7 +145,7 @@ def add_patient(conn, args):
     # Optionally link to customer
     customer_id = getattr(args, "customer_id", None)
     if customer_id:
-        row = conn.execute("SELECT id FROM customer WHERE id = ?", (customer_id,)).fetchone()
+        row = conn.execute(Q.from_(Table("customer")).select(Field("id")).where(Field("id") == P()).get_sql(), (customer_id,)).fetchone()
         if not row:
             err(f"Customer {customer_id} not found")
 
@@ -155,15 +156,9 @@ def add_patient(conn, args):
         encrypted_ssn, ssn_last4 = _encrypt_ssn(raw_ssn)
 
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_patient (
-            id, naming_series, customer_id, first_name, last_name, full_name,
-            date_of_birth, gender, ssn, ssn_last4, mrn, marital_status, race, ethnicity,
-            preferred_language, primary_phone, secondary_phone, email,
-            address_line1, address_line2, city, state, zip_code,
-            primary_provider_id, status, notes, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_patient", {"id": P(), "naming_series": P(), "customer_id": P(), "first_name": P(), "last_name": P(), "full_name": P(), "date_of_birth": P(), "gender": P(), "ssn": P(), "ssn_last4": P(), "mrn": P(), "marital_status": P(), "race": P(), "ethnicity": P(), "preferred_language": P(), "primary_phone": P(), "secondary_phone": P(), "email": P(), "address_line1": P(), "address_line2": P(), "city": P(), "state": P(), "zip_code": P(), "primary_provider_id": P(), "status": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql, (
         patient_id, mrn, customer_id,
         args.first_name, args.last_name, full_name,
         args.date_of_birth, args.gender,
@@ -195,7 +190,7 @@ def add_patient(conn, args):
 # ---------------------------------------------------------------------------
 def get_patient(conn, args):
     _validate_patient(conn, args.patient_id)
-    row = conn.execute("SELECT * FROM healthclaw_patient WHERE id = ?", (args.patient_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_patient")).select(Table("healthclaw_patient").star).where(Field("id") == P()).get_sql(), (args.patient_id,)).fetchone()
     data = row_to_dict(row)
     _mask_ssn_in_row(data)
 
@@ -257,11 +252,11 @@ def update_patient(conn, args):
             elif col_name == "ethnicity":
                 _validate_enum(val, VALID_ETHNICITIES, "ethnicity")
             elif col_name == "primary_provider_id":
-                row = conn.execute("SELECT id FROM employee WHERE id = ?", (val,)).fetchone()
+                row = conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (val,)).fetchone()
                 if not row:
                     err(f"Provider (employee) {val} not found")
             elif col_name == "customer_id":
-                row = conn.execute("SELECT id FROM customer WHERE id = ?", (val,)).fetchone()
+                row = conn.execute(Q.from_(Table("customer")).select(Field("id")).where(Field("id") == P()).get_sql(), (val,)).fetchone()
                 if not row:
                     err(f"Customer {val} not found")
             updates.append(f"{col_name} = ?")
@@ -273,7 +268,7 @@ def update_patient(conn, args):
 
     # Recompute full_name if first/last changed
     if "first_name" in changed or "last_name" in changed:
-        row = conn.execute("SELECT first_name, last_name FROM healthclaw_patient WHERE id = ?", (args.patient_id,)).fetchone()
+        row = conn.execute(Q.from_(Table("healthclaw_patient")).select(Field("first_name"), Field("last_name")).where(Field("id") == P()).get_sql(), (args.patient_id,)).fetchone()
         fn = getattr(args, "first_name", None) or row[0]
         ln = getattr(args, "last_name", None) or row[1]
         updates.append("full_name = ?")
@@ -351,16 +346,10 @@ def add_patient_insurance(conn, args):
     naming = get_next_name(conn, "healthclaw_patient_insurance", company_id=args.company_id)
     now = _now_iso()
 
-    conn.execute("""
-        INSERT INTO healthclaw_patient_insurance (
-            id, naming_series, patient_id, insurance_type, payer_name, payer_id,
-            plan_name, plan_type, group_number, member_id,
-            subscriber_name, subscriber_dob, subscriber_relationship,
-            copay_amount, deductible, deductible_met, out_of_pocket_max,
-            effective_date, termination_date, preauth_required,
-            status, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_patient_insurance", {"id": P(), "naming_series": P(), "patient_id": P(), "insurance_type": P(), "payer_name": P(), "payer_id": P(), "plan_name": P(), "plan_type": P(), "group_number": P(), "member_id": P(), "subscriber_name": P(), "subscriber_dob": P(), "subscriber_relationship": P(), "copay_amount": P(), "deductible": P(), "deductible_met": P(), "out_of_pocket_max": P(), "effective_date": P(), "termination_date": P(), "preauth_required": P(), "status": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+
+
+    conn.execute(sql, (
         ins_id, naming, args.patient_id, insurance_type,
         args.payer_name, getattr(args, "payer_id", None),
         getattr(args, "plan_name", None), plan_type,
@@ -388,7 +377,7 @@ def update_patient_insurance(conn, args):
     ins_id = getattr(args, "insurance_id", None)
     if not ins_id:
         err("--insurance-id is required")
-    row = conn.execute("SELECT id FROM healthclaw_patient_insurance WHERE id = ?", (ins_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_patient_insurance")).select(Field("id")).where(Field("id") == P()).get_sql(), (ins_id,)).fetchone()
     if not row:
         err(f"Insurance {ins_id} not found")
 
@@ -491,18 +480,15 @@ def add_allergy(conn, args):
 
     noted_by = getattr(args, "noted_by_id", None)
     if noted_by:
-        row = conn.execute("SELECT id FROM employee WHERE id = ?", (noted_by,)).fetchone()
+        row = conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (noted_by,)).fetchone()
         if not row:
             err(f"Employee {noted_by} not found")
 
     allergy_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_allergy (
-            id, patient_id, allergen, allergen_type, reaction, severity,
-            onset_date, status, noted_by_id, notes, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_allergy", {"id": P(), "patient_id": P(), "allergen": P(), "allergen_type": P(), "reaction": P(), "severity": P(), "onset_date": P(), "status": P(), "noted_by_id": P(), "notes": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql, (
         allergy_id, args.patient_id, args.allergen, allergen_type,
         getattr(args, "reaction", None), severity,
         getattr(args, "onset_date", None), "active",
@@ -520,7 +506,7 @@ def update_allergy(conn, args):
     allergy_id = getattr(args, "allergy_id", None)
     if not allergy_id:
         err("--allergy-id is required")
-    row = conn.execute("SELECT id FROM healthclaw_allergy WHERE id = ?", (allergy_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_allergy")).select(Field("id")).where(Field("id") == P()).get_sql(), (allergy_id,)).fetchone()
     if not row:
         err(f"Allergy {allergy_id} not found")
 
@@ -596,12 +582,9 @@ def add_medical_history(conn, args):
 
     medhist_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_medical_history (
-            id, patient_id, condition, icd10_code, diagnosis_date,
-            resolution_date, status, notes, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_medical_history", {"id": P(), "patient_id": P(), "condition": P(), "icd10_code": P(), "diagnosis_date": P(), "resolution_date": P(), "status": P(), "notes": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql, (
         medhist_id, args.patient_id, condition,
         getattr(args, "icd10_code", None),
         getattr(args, "diagnosis_date", None),
@@ -621,7 +604,7 @@ def update_medical_history(conn, args):
     mh_id = getattr(args, "medical_history_id", None)
     if not mh_id:
         err("--medical-history-id is required")
-    row = conn.execute("SELECT id FROM healthclaw_medical_history WHERE id = ?", (mh_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_medical_history")).select(Field("id")).where(Field("id") == P()).get_sql(), (mh_id,)).fetchone()
     if not row:
         err(f"Medical history {mh_id} not found")
 
@@ -696,12 +679,9 @@ def add_patient_contact(conn, args):
 
     contact_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_patient_contact (
-            id, patient_id, contact_type, name, relationship, phone,
-            email, address, is_primary, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_patient_contact", {"id": P(), "patient_id": P(), "contact_type": P(), "name": P(), "relationship": P(), "phone": P(), "email": P(), "address": P(), "is_primary": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql, (
         contact_id, args.patient_id, contact_type, contact_name,
         getattr(args, "relationship", None),
         getattr(args, "contact_phone", None),
@@ -722,7 +702,7 @@ def update_patient_contact(conn, args):
     contact_id = getattr(args, "contact_id", None)
     if not contact_id:
         err("--contact-id is required")
-    row = conn.execute("SELECT id FROM healthclaw_patient_contact WHERE id = ?", (contact_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_patient_contact")).select(Field("id")).where(Field("id") == P()).get_sql(), (contact_id,)).fetchone()
     if not row:
         err(f"Contact {contact_id} not found")
 
@@ -776,19 +756,15 @@ def add_consent(conn, args):
 
     obtained_by = getattr(args, "obtained_by_id", None)
     if obtained_by:
-        row = conn.execute("SELECT id FROM employee WHERE id = ?", (obtained_by,)).fetchone()
+        row = conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (obtained_by,)).fetchone()
         if not row:
             err(f"Employee {obtained_by} not found")
 
     consent_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_consent (
-            id, patient_id, consent_type, description, granted_date,
-            expiration_date, revoked_date, status, witness_name,
-            obtained_by_id, notes, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_consent", {"id": P(), "patient_id": P(), "consent_type": P(), "description": P(), "granted_date": P(), "expiration_date": P(), "revoked_date": P(), "status": P(), "witness_name": P(), "obtained_by_id": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql, (
         consent_id, args.patient_id, consent_type,
         getattr(args, "description", None), granted_date,
         getattr(args, "expiration_date", None), None,

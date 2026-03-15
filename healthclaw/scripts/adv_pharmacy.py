@@ -15,6 +15,7 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, Case
 except ImportError:
     pass
 
@@ -121,7 +122,7 @@ def get_medication(conn, args):
     med_id = getattr(args, "medication_id", None)
     if not med_id:
         err("--medication-id is required")
-    row = conn.execute("SELECT * FROM healthclaw_medication WHERE id = ?", (med_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_medication")).select(Table("healthclaw_medication").star).where(Field("id") == P()).get_sql(), (med_id,)).fetchone()
     if not row:
         err(f"Medication {med_id} not found")
     ok(row_to_dict(row))
@@ -134,7 +135,7 @@ def update_medication(conn, args):
     med_id = getattr(args, "medication_id", None)
     if not med_id:
         err("--medication-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_medication WHERE id = ?", (med_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_medication")).select(Field("id")).where(Field("id") == P()).get_sql(), (med_id,)).fetchone():
         err(f"Medication {med_id} not found")
 
     updates, params, changed = [], [], []
@@ -185,8 +186,7 @@ def add_prescription(conn, args):
             err(f"--{req.replace('_', '-')} is required")
 
     # Validate medication exists
-    med_row = conn.execute("SELECT id, dea_schedule FROM healthclaw_medication WHERE id = ?",
-                           (args.medication_id,)).fetchone()
+    med_row = conn.execute(Q.from_(Table("healthclaw_medication")).select(Field("id"), Field("dea_schedule")).where(Field("id") == P()).get_sql(), (args.medication_id,)).fetchone()
     if not med_row:
         err(f"Medication {args.medication_id} not found")
 
@@ -265,7 +265,7 @@ def get_prescription(conn, args):
     rx_id = getattr(args, "prescription_id", None)
     if not rx_id:
         err("--prescription-id is required")
-    row = conn.execute("SELECT * FROM healthclaw_prescription WHERE id = ?", (rx_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_prescription")).select(Table("healthclaw_prescription").star).where(Field("id") == P()).get_sql(), (rx_id,)).fetchone()
     if not row:
         err(f"Prescription {rx_id} not found")
     ok(row_to_dict(row))
@@ -281,7 +281,7 @@ def fill_prescription(conn, args):
     if not getattr(args, "dispensed_by", None):
         err("--dispensed-by is required")
 
-    row = conn.execute("SELECT * FROM healthclaw_prescription WHERE id = ?", (rx_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_prescription")).select(Table("healthclaw_prescription").star).where(Field("id") == P()).get_sql(), (rx_id,)).fetchone()
     if not row:
         err(f"Prescription {rx_id} not found")
     rx = row_to_dict(row)
@@ -351,7 +351,7 @@ def refill_prescription(conn, args):
     if not getattr(args, "dispensed_by", None):
         err("--dispensed-by is required")
 
-    row = conn.execute("SELECT * FROM healthclaw_prescription WHERE id = ?", (rx_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_prescription")).select(Table("healthclaw_prescription").star).where(Field("id") == P()).get_sql(), (rx_id,)).fetchone()
     if not row:
         err(f"Prescription {rx_id} not found")
     rx = row_to_dict(row)
@@ -424,8 +424,7 @@ def add_dispense_log(conn, args):
         if not getattr(args, req, None):
             err(f"--{req.replace('_', '-')} is required")
 
-    rx_row = conn.execute("SELECT * FROM healthclaw_prescription WHERE id = ?",
-                          (args.prescription_id,)).fetchone()
+    rx_row = conn.execute(Q.from_(Table("healthclaw_prescription")).select(Table("healthclaw_prescription").star).where(Field("id") == P()).get_sql(), (args.prescription_id,)).fetchone()
     if not rx_row:
         err(f"Prescription {args.prescription_id} not found")
     rx = row_to_dict(rx_row)
@@ -436,12 +435,9 @@ def add_dispense_log(conn, args):
 
     disp_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute(
-        """INSERT INTO healthclaw_dispense_log
-           (id, company_id, prescription_id, medication_id, dispensed_by,
-            quantity_dispensed, dispense_date, is_refill, lot_number,
-            expiration_date, notes, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+    sql, _ = insert_row("healthclaw_dispense_log", {"id": P(), "company_id": P(), "prescription_id": P(), "medication_id": P(), "dispensed_by": P(), "quantity_dispensed": P(), "dispense_date": P(), "is_refill": P(), "lot_number": P(), "expiration_date": P(), "notes": P(), "created_at": P()})
+
+    conn.execute(sql,
         (disp_id, args.company_id, args.prescription_id, rx["medication_id"],
          args.dispensed_by, quantity, now,
          int(getattr(args, "is_refill", None) or 0),
@@ -484,7 +480,7 @@ def check_drug_interaction(conn, args):
     med_id = getattr(args, "medication_id", None)
     if not med_id:
         err("--medication-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_medication WHERE id = ?", (med_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_medication")).select(Field("id")).where(Field("id") == P()).get_sql(), (med_id,)).fetchone():
         err(f"Medication {med_id} not found")
 
     # Check interactions where this medication is either A or B

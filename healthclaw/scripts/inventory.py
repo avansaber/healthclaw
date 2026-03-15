@@ -17,6 +17,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row
 
     # Register HealthClaw naming prefixes (inventory domain)
     ENTITY_PREFIXES.setdefault("healthclaw_dispensing", "DISP-")
@@ -41,14 +42,14 @@ VALID_DISPENSING_STATUSES = ("dispensed", "returned", "recalled", "voided")
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    if not conn.execute("SELECT id FROM company WHERE id = ?", (company_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
 
 def _validate_patient(conn, patient_id):
     if not patient_id:
         err("--patient-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_patient WHERE id = ?", (patient_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_patient")).select(Field("id")).where(Field("id") == P()).get_sql(), (patient_id,)).fetchone():
         err(f"Patient {patient_id} not found")
 
 
@@ -72,12 +73,9 @@ def add_formulary(conn, args):
 
     formulary_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_formulary (
-            id, name, description, effective_date, expiration_date,
-            status, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_formulary", {"id": P(), "name": P(), "description": P(), "effective_date": P(), "expiration_date": P(), "status": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql, (
         formulary_id, name,
         getattr(args, "description", None),
         effective_date,
@@ -96,7 +94,7 @@ def update_formulary(conn, args):
     formulary_id = getattr(args, "formulary_id", None)
     if not formulary_id:
         err("--formulary-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_formulary WHERE id = ?", (formulary_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_formulary")).select(Field("id")).where(Field("id") == P()).get_sql(), (formulary_id,)).fetchone():
         err(f"Formulary {formulary_id} not found")
 
     updates, params, changed = [], [], []
@@ -132,21 +130,37 @@ def update_formulary(conn, args):
 # 3. list-formularies
 # ---------------------------------------------------------------------------
 def list_formularies(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_formulary")
+
+    q_count = Q.from_(t).select(fn.Count("*"))
+
+    q_rows = Q.from_(t).select(t.star)
+
+    params = []
+
+
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+
+        q_count = q_count.where(t.company_id == P())
+
+        q_rows = q_rows.where(t.company_id == P())
+
         params.append(args.company_id)
+
     if getattr(args, "status", None):
-        where.append("status = ?")
+
+        q_count = q_count.where(t.status == P())
+
+        q_rows = q_rows.where(t.status == P())
+
         params.append(args.status)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_formulary WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_formulary WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+
+    q_rows = q_rows.orderby(t.created_at, order=Order.desc).limit(P()).offset(P())
+
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -161,13 +175,13 @@ def add_formulary_item(conn, args):
     formulary_id = getattr(args, "formulary_id", None)
     if not formulary_id:
         err("--formulary-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_formulary WHERE id = ?", (formulary_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_formulary")).select(Field("id")).where(Field("id") == P()).get_sql(), (formulary_id,)).fetchone():
         err(f"Formulary {formulary_id} not found")
 
     item_id = getattr(args, "item_id", None)
     if not item_id:
         err("--item-id is required")
-    if not conn.execute("SELECT id FROM item WHERE id = ?", (item_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("item")).select(Field("id")).where(Field("id") == P()).get_sql(), (item_id,)).fetchone():
         err(f"Item {item_id} not found")
 
     # Validate optional enums
@@ -178,14 +192,9 @@ def add_formulary_item(conn, args):
 
     fi_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_formulary_item (
-            id, formulary_id, item_id, ndc_code, drug_class,
-            generic_name, brand_name, strength, dosage_form, route,
-            controlled_schedule, therapeutic_class, formulary_tier,
-            requires_prior_auth, max_daily_dose, status, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_formulary_item", {"id": P(), "formulary_id": P(), "item_id": P(), "ndc_code": P(), "drug_class": P(), "generic_name": P(), "brand_name": P(), "strength": P(), "dosage_form": P(), "route": P(), "controlled_schedule": P(), "therapeutic_class": P(), "formulary_tier": P(), "requires_prior_auth": P(), "max_daily_dose": P(), "status": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql, (
         fi_id, formulary_id, item_id,
         getattr(args, "ndc_code", None),
         getattr(args, "drug_class", None),
@@ -213,7 +222,7 @@ def update_formulary_item(conn, args):
     fi_id = getattr(args, "formulary_item_id", None)
     if not fi_id:
         err("--formulary-item-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_formulary_item WHERE id = ?", (fi_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_formulary_item")).select(Field("id")).where(Field("id") == P()).get_sql(), (fi_id,)).fetchone():
         err(f"Formulary item {fi_id} not found")
 
     updates, params, changed = [], [], []
@@ -271,21 +280,37 @@ def update_formulary_item(conn, args):
 # 6. list-formulary-items
 # ---------------------------------------------------------------------------
 def list_formulary_items(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_formulary_item")
+
+    q_count = Q.from_(t).select(fn.Count("*"))
+
+    q_rows = Q.from_(t).select(t.star)
+
+    params = []
+
+
     if getattr(args, "formulary_id", None):
-        where.append("formulary_id = ?")
+
+        q_count = q_count.where(t.formulary_id == P())
+
+        q_rows = q_rows.where(t.formulary_id == P())
+
         params.append(args.formulary_id)
+
     if getattr(args, "status", None):
-        where.append("status = ?")
+
+        q_count = q_count.where(t.status == P())
+
+        q_rows = q_rows.where(t.status == P())
+
         params.append(args.status)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_formulary_item WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_formulary_item WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+
+    q_rows = q_rows.orderby(t.created_at, order=Order.desc).limit(P()).offset(P())
+
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -302,7 +327,7 @@ def add_dispensing(conn, args):
     prescription_id = getattr(args, "prescription_id", None)
     if not prescription_id:
         err("--prescription-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_prescription WHERE id = ?", (prescription_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_prescription")).select(Field("id")).where(Field("id") == P()).get_sql(), (prescription_id,)).fetchone():
         err(f"Prescription {prescription_id} not found")
 
     _validate_patient(conn, args.patient_id)
@@ -310,7 +335,7 @@ def add_dispensing(conn, args):
     dispensed_by = getattr(args, "dispensed_by_id", None)
     if not dispensed_by:
         err("--dispensed-by-id is required")
-    if not conn.execute("SELECT id FROM employee WHERE id = ?", (dispensed_by,)).fetchone():
+    if not conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (dispensed_by,)).fetchone():
         err(f"Employee {dispensed_by} not found")
 
     dispensed_date = getattr(args, "dispensed_date", None)
@@ -320,24 +345,19 @@ def add_dispensing(conn, args):
     # Optional FK checks
     formulary_item_id = getattr(args, "formulary_item_id", None)
     if formulary_item_id:
-        if not conn.execute("SELECT id FROM healthclaw_formulary_item WHERE id = ?", (formulary_item_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("healthclaw_formulary_item")).select(Field("id")).where(Field("id") == P()).get_sql(), (formulary_item_id,)).fetchone():
             err(f"Formulary item {formulary_item_id} not found")
     item_id = getattr(args, "item_id", None)
     if item_id:
-        if not conn.execute("SELECT id FROM item WHERE id = ?", (item_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("item")).select(Field("id")).where(Field("id") == P()).get_sql(), (item_id,)).fetchone():
             err(f"Item {item_id} not found")
 
     disp_id = str(uuid.uuid4())
     naming = get_next_name(conn, "healthclaw_dispensing", company_id=args.company_id)
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_dispensing (
-            id, naming_series, prescription_id, patient_id, formulary_item_id,
-            item_id, dispensed_by_id, dispensed_date, quantity, lot_number,
-            expiration_date, ndc_code, directions, refill_number,
-            status, notes, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_dispensing", {"id": P(), "naming_series": P(), "prescription_id": P(), "patient_id": P(), "formulary_item_id": P(), "item_id": P(), "dispensed_by_id": P(), "dispensed_date": P(), "quantity": P(), "lot_number": P(), "expiration_date": P(), "ndc_code": P(), "directions": P(), "refill_number": P(), "status": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql, (
         disp_id, naming, prescription_id, args.patient_id,
         formulary_item_id, item_id, dispensed_by, dispensed_date,
         str(round_currency(to_decimal(getattr(args, "quantity", None) or "0"))),
@@ -362,7 +382,7 @@ def get_dispensing(conn, args):
     disp_id = getattr(args, "dispensing_id", None)
     if not disp_id:
         err("--dispensing-id is required")
-    row = conn.execute("SELECT * FROM healthclaw_dispensing WHERE id = ?", (disp_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_dispensing")).select(Table("healthclaw_dispensing").star).where(Field("id") == P()).get_sql(), (disp_id,)).fetchone()
     if not row:
         err(f"Dispensing {disp_id} not found")
     data = row_to_dict(row)
@@ -382,24 +402,45 @@ def get_dispensing(conn, args):
 # 9. list-dispensings
 # ---------------------------------------------------------------------------
 def list_dispensings(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_dispensing")
+
+    q_count = Q.from_(t).select(fn.Count("*"))
+
+    q_rows = Q.from_(t).select(t.star)
+
+    params = []
+
+
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?")
+
+        q_count = q_count.where(t.patient_id == P())
+
+        q_rows = q_rows.where(t.patient_id == P())
+
         params.append(args.patient_id)
+
     if getattr(args, "prescription_id", None):
-        where.append("prescription_id = ?")
+
+        q_count = q_count.where(t.prescription_id == P())
+
+        q_rows = q_rows.where(t.prescription_id == P())
+
         params.append(args.prescription_id)
+
     if getattr(args, "status", None):
-        where.append("status = ?")
+
+        q_count = q_count.where(t.status == P())
+
+        q_rows = q_rows.where(t.status == P())
+
         params.append(args.status)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_dispensing WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_dispensing WHERE {where_sql} ORDER BY dispensed_date DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+
+    q_rows = q_rows.orderby(t.dispensed_date, order=Order.desc).limit(P()).offset(P())
+
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -414,7 +455,7 @@ def cancel_dispensing(conn, args):
     disp_id = getattr(args, "dispensing_id", None)
     if not disp_id:
         err("--dispensing-id is required")
-    row = conn.execute("SELECT status FROM healthclaw_dispensing WHERE id = ?", (disp_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_dispensing")).select(Field("status")).where(Field("id") == P()).get_sql(), (disp_id,)).fetchone()
     if not row:
         err(f"Dispensing {disp_id} not found")
     if row[0] != "dispensed":

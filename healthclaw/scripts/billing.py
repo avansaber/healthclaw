@@ -17,6 +17,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row
 
     # Register HealthClaw naming prefixes (billing domain)
     ENTITY_PREFIXES.setdefault("healthclaw_charge", "CHG-")
@@ -44,21 +45,21 @@ VALID_PAYMENT_METHODS = ("check", "eft", "cash", "credit_card", "ach", "other")
 def _validate_company(conn, company_id):
     if not company_id:
         err("--company-id is required")
-    if not conn.execute("SELECT id FROM company WHERE id = ?", (company_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("company")).select(Field("id")).where(Field("id") == P()).get_sql(), (company_id,)).fetchone():
         err(f"Company {company_id} not found")
 
 
 def _validate_patient(conn, patient_id):
     if not patient_id:
         err("--patient-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_patient WHERE id = ?", (patient_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_patient")).select(Field("id")).where(Field("id") == P()).get_sql(), (patient_id,)).fetchone():
         err(f"Patient {patient_id} not found")
 
 
 def _validate_encounter(conn, encounter_id):
     if not encounter_id:
         err("--encounter-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_encounter WHERE id = ?", (encounter_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_encounter")).select(Field("id")).where(Field("id") == P()).get_sql(), (encounter_id,)).fetchone():
         err(f"Encounter {encounter_id} not found")
 
 
@@ -85,12 +86,9 @@ def add_fee_schedule(conn, args):
 
     fs_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_fee_schedule (
-            id, name, description, payer_type, effective_date, expiration_date,
-            status, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_fee_schedule", {"id": P(), "name": P(), "description": P(), "payer_type": P(), "effective_date": P(), "expiration_date": P(), "status": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql, (
         fs_id, name,
         getattr(args, "description", None),
         payer_type, effective_date,
@@ -109,7 +107,7 @@ def update_fee_schedule(conn, args):
     fs_id = getattr(args, "fee_schedule_id", None)
     if not fs_id:
         err("--fee-schedule-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_fee_schedule WHERE id = ?", (fs_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_fee_schedule")).select(Field("id")).where(Field("id") == P()).get_sql(), (fs_id,)).fetchone():
         err(f"Fee schedule {fs_id} not found")
 
     updates, params, changed = [], [], []
@@ -152,21 +150,37 @@ def update_fee_schedule(conn, args):
 # 3. list-fee-schedules
 # ---------------------------------------------------------------------------
 def list_fee_schedules(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_fee_schedule")
+
+    q_count = Q.from_(t).select(fn.Count("*"))
+
+    q_rows = Q.from_(t).select(t.star)
+
+    params = []
+
+
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+
+        q_count = q_count.where(t.company_id == P())
+
+        q_rows = q_rows.where(t.company_id == P())
+
         params.append(args.company_id)
+
     if getattr(args, "status", None):
-        where.append("status = ?")
+
+        q_count = q_count.where(t.status == P())
+
+        q_rows = q_rows.where(t.status == P())
+
         params.append(args.status)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_fee_schedule WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_fee_schedule WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+
+    q_rows = q_rows.orderby(t.created_at, order=Order.desc).limit(P()).offset(P())
+
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -181,7 +195,7 @@ def add_fee_schedule_item(conn, args):
     fs_id = getattr(args, "fee_schedule_id", None)
     if not fs_id:
         err("--fee-schedule-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_fee_schedule WHERE id = ?", (fs_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_fee_schedule")).select(Field("id")).where(Field("id") == P()).get_sql(), (fs_id,)).fetchone():
         err(f"Fee schedule {fs_id} not found")
 
     cpt_code = getattr(args, "cpt_code", None)
@@ -193,12 +207,9 @@ def add_fee_schedule_item(conn, args):
 
     fsi_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_fee_schedule_item (
-            id, fee_schedule_id, cpt_code, description, standard_charge,
-            allowed_amount, unit_count, modifier, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_fee_schedule_item", {"id": P(), "fee_schedule_id": P(), "cpt_code": P(), "description": P(), "standard_charge": P(), "allowed_amount": P(), "unit_count": P(), "modifier": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql, (
         fsi_id, fs_id, cpt_code,
         getattr(args, "description", None),
         str(round_currency(to_decimal(standard_charge))),
@@ -216,21 +227,37 @@ def add_fee_schedule_item(conn, args):
 # 5. list-fee-schedule-items
 # ---------------------------------------------------------------------------
 def list_fee_schedule_items(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_fee_schedule_item")
+
+    q_count = Q.from_(t).select(fn.Count("*"))
+
+    q_rows = Q.from_(t).select(t.star)
+
+    params = []
+
+
     if getattr(args, "fee_schedule_id", None):
-        where.append("fee_schedule_id = ?")
+
+        q_count = q_count.where(t.fee_schedule_id == P())
+
+        q_rows = q_rows.where(t.fee_schedule_id == P())
+
         params.append(args.fee_schedule_id)
+
     if getattr(args, "cpt_code", None):
-        where.append("cpt_code = ?")
+
+        q_count = q_count.where(t.cpt_code == P())
+
+        q_rows = q_rows.where(t.cpt_code == P())
+
         params.append(args.cpt_code)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_fee_schedule_item WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_fee_schedule_item WHERE {where_sql} ORDER BY cpt_code ASC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+
+    q_rows = q_rows.orderby(t.cpt_code, order=Order.asc).limit(P()).offset(P())
+
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -256,31 +283,25 @@ def add_charge(conn, args):
     provider_id = getattr(args, "provider_id", None)
     if not provider_id:
         err("--provider-id is required")
-    if not conn.execute("SELECT id FROM employee WHERE id = ?", (provider_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (provider_id,)).fetchone():
         err(f"Provider (employee) {provider_id} not found")
 
     # Optional FK checks
     procedure_id = getattr(args, "procedure_id", None)
     if procedure_id:
-        if not conn.execute("SELECT id FROM healthclaw_procedure WHERE id = ?", (procedure_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("healthclaw_procedure")).select(Field("id")).where(Field("id") == P()).get_sql(), (procedure_id,)).fetchone():
             err(f"Procedure {procedure_id} not found")
     fee_schedule_id = getattr(args, "fee_schedule_id", None)
     if fee_schedule_id:
-        if not conn.execute("SELECT id FROM healthclaw_fee_schedule WHERE id = ?", (fee_schedule_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("healthclaw_fee_schedule")).select(Field("id")).where(Field("id") == P()).get_sql(), (fee_schedule_id,)).fetchone():
             err(f"Fee schedule {fee_schedule_id} not found")
 
     charge_id = str(uuid.uuid4())
     naming = get_next_name(conn, "healthclaw_charge", company_id=args.company_id)
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_charge (
-            id, naming_series, encounter_id, patient_id, procedure_id,
-            cpt_code, modifiers, diagnosis_ids, units,
-            charge_amount, allowed_amount, fee_schedule_id,
-            service_date, provider_id, place_of_service,
-            charge_status, notes, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_charge", {"id": P(), "naming_series": P(), "encounter_id": P(), "patient_id": P(), "procedure_id": P(), "cpt_code": P(), "modifiers": P(), "diagnosis_ids": P(), "units": P(), "charge_amount": P(), "allowed_amount": P(), "fee_schedule_id": P(), "service_date": P(), "provider_id": P(), "place_of_service": P(), "charge_status": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql, (
         charge_id, naming, args.encounter_id, args.patient_id,
         procedure_id, cpt_code,
         getattr(args, "modifiers", None),
@@ -303,27 +324,53 @@ def add_charge(conn, args):
 # 7. list-charges
 # ---------------------------------------------------------------------------
 def list_charges(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_charge")
+
+    q_count = Q.from_(t).select(fn.Count("*"))
+
+    q_rows = Q.from_(t).select(t.star)
+
+    params = []
+
+
     if getattr(args, "encounter_id", None):
-        where.append("encounter_id = ?")
+
+        q_count = q_count.where(t.encounter_id == P())
+
+        q_rows = q_rows.where(t.encounter_id == P())
+
         params.append(args.encounter_id)
+
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?")
+
+        q_count = q_count.where(t.patient_id == P())
+
+        q_rows = q_rows.where(t.patient_id == P())
+
         params.append(args.patient_id)
+
     if getattr(args, "status", None):
-        where.append("charge_status = ?")
+
+        q_count = q_count.where(t.charge_status == P())
+
+        q_rows = q_rows.where(t.charge_status == P())
+
         params.append(args.status)
+
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+
+        q_count = q_count.where(t.company_id == P())
+
+        q_rows = q_rows.where(t.company_id == P())
+
         params.append(args.company_id)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_charge WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_charge WHERE {where_sql} ORDER BY service_date DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+
+    q_rows = q_rows.orderby(t.service_date, order=Order.desc).limit(P()).offset(P())
+
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -342,7 +389,7 @@ def add_claim(conn, args):
     insurance_id = getattr(args, "insurance_id", None)
     if not insurance_id:
         err("--insurance-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_patient_insurance WHERE id = ?", (insurance_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_patient_insurance")).select(Field("id")).where(Field("id") == P()).get_sql(), (insurance_id,)).fetchone():
         err(f"Insurance {insurance_id} not found")
 
     claim_date = getattr(args, "claim_date", None)
@@ -355,31 +402,23 @@ def add_claim(conn, args):
     # Optional FK checks
     billing_provider_id = getattr(args, "billing_provider_id", None)
     if billing_provider_id:
-        if not conn.execute("SELECT id FROM employee WHERE id = ?", (billing_provider_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (billing_provider_id,)).fetchone():
             err(f"Billing provider {billing_provider_id} not found")
     rendering_provider_id = getattr(args, "rendering_provider_id", None)
     if rendering_provider_id:
-        if not conn.execute("SELECT id FROM employee WHERE id = ?", (rendering_provider_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (rendering_provider_id,)).fetchone():
             err(f"Rendering provider {rendering_provider_id} not found")
     prior_auth_id = getattr(args, "prior_auth_id", None)
     if prior_auth_id:
-        if not conn.execute("SELECT id FROM healthclaw_prior_auth WHERE id = ?", (prior_auth_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("healthclaw_prior_auth")).select(Field("id")).where(Field("id") == P()).get_sql(), (prior_auth_id,)).fetchone():
             err(f"Prior auth {prior_auth_id} not found")
 
     claim_id = str(uuid.uuid4())
     naming = get_next_name(conn, "healthclaw_claim", company_id=args.company_id)
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_claim (
-            id, naming_series, patient_id, insurance_id, encounter_id,
-            claim_date, total_charge, total_allowed, total_paid,
-            patient_responsibility, adjustment_amount,
-            billing_provider_id, rendering_provider_id,
-            place_of_service, claim_type, filing_indicator, prior_auth_id,
-            sales_invoice_id, claim_status, denial_reason, appeal_deadline,
-            notes, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_claim", {"id": P(), "naming_series": P(), "patient_id": P(), "insurance_id": P(), "encounter_id": P(), "claim_date": P(), "total_charge": P(), "total_allowed": P(), "total_paid": P(), "patient_responsibility": P(), "adjustment_amount": P(), "billing_provider_id": P(), "rendering_provider_id": P(), "place_of_service": P(), "claim_type": P(), "filing_indicator": P(), "prior_auth_id": P(), "sales_invoice_id": P(), "claim_status": P(), "denial_reason": P(), "appeal_deadline": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql, (
         claim_id, naming, args.patient_id, insurance_id, args.encounter_id,
         claim_date,
         str(round_currency(to_decimal(getattr(args, "total_charge", None) or "0"))),
@@ -410,7 +449,7 @@ def update_claim(conn, args):
     claim_id = getattr(args, "claim_id", None)
     if not claim_id:
         err("--claim-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_claim WHERE id = ?", (claim_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_claim")).select(Field("id")).where(Field("id") == P()).get_sql(), (claim_id,)).fetchone():
         err(f"Claim {claim_id} not found")
 
     updates, params, changed = [], [], []
@@ -453,7 +492,7 @@ def update_claim(conn, args):
     # Optional FK updates
     billing_provider_id = getattr(args, "billing_provider_id", None)
     if billing_provider_id is not None:
-        if not conn.execute("SELECT id FROM employee WHERE id = ?", (billing_provider_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (billing_provider_id,)).fetchone():
             err(f"Billing provider {billing_provider_id} not found")
         updates.append("billing_provider_id = ?")
         params.append(billing_provider_id)
@@ -461,7 +500,7 @@ def update_claim(conn, args):
 
     rendering_provider_id = getattr(args, "rendering_provider_id", None)
     if rendering_provider_id is not None:
-        if not conn.execute("SELECT id FROM employee WHERE id = ?", (rendering_provider_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (rendering_provider_id,)).fetchone():
             err(f"Rendering provider {rendering_provider_id} not found")
         updates.append("rendering_provider_id = ?")
         params.append(rendering_provider_id)
@@ -469,7 +508,7 @@ def update_claim(conn, args):
 
     prior_auth_id = getattr(args, "prior_auth_id", None)
     if prior_auth_id is not None:
-        if not conn.execute("SELECT id FROM healthclaw_prior_auth WHERE id = ?", (prior_auth_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("healthclaw_prior_auth")).select(Field("id")).where(Field("id") == P()).get_sql(), (prior_auth_id,)).fetchone():
             err(f"Prior auth {prior_auth_id} not found")
         updates.append("prior_auth_id = ?")
         params.append(prior_auth_id)
@@ -499,7 +538,7 @@ def get_claim(conn, args):
     claim_id = getattr(args, "claim_id", None)
     if not claim_id:
         err("--claim-id is required")
-    row = conn.execute("SELECT * FROM healthclaw_claim WHERE id = ?", (claim_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_claim")).select(Table("healthclaw_claim").star).where(Field("id") == P()).get_sql(), (claim_id,)).fetchone()
     if not row:
         err(f"Claim {claim_id} not found")
     data = row_to_dict(row)
@@ -513,9 +552,7 @@ def get_claim(conn, args):
     if ins:
         data["payer_name"] = ins[0]
     # Enrich: line count
-    data["line_count"] = conn.execute(
-        "SELECT COUNT(*) FROM healthclaw_claim_line WHERE claim_id = ?", (claim_id,)
-    ).fetchone()[0]
+    data["line_count"] = conn.execute(Q.from_(Table("healthclaw_claim_line")).select(fn.Count("*")).where(Field("claim_id") == P()).get_sql(), (claim_id,)).fetchone()[0]
     # Enrich: payment posting total (Python Decimal summation — never CAST AS REAL)
     posting_rows = conn.execute(
         "SELECT amount FROM healthclaw_payment_posting WHERE claim_id = ?",
@@ -530,27 +567,53 @@ def get_claim(conn, args):
 # 11. list-claims
 # ---------------------------------------------------------------------------
 def list_claims(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_claim")
+
+    q_count = Q.from_(t).select(fn.Count("*"))
+
+    q_rows = Q.from_(t).select(t.star)
+
+    params = []
+
+
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?")
+
+        q_count = q_count.where(t.patient_id == P())
+
+        q_rows = q_rows.where(t.patient_id == P())
+
         params.append(args.patient_id)
+
     if getattr(args, "status", None):
-        where.append("claim_status = ?")
+
+        q_count = q_count.where(t.claim_status == P())
+
+        q_rows = q_rows.where(t.claim_status == P())
+
         params.append(args.status)
+
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+
+        q_count = q_count.where(t.company_id == P())
+
+        q_rows = q_rows.where(t.company_id == P())
+
         params.append(args.company_id)
+
     if getattr(args, "insurance_id", None):
-        where.append("insurance_id = ?")
+
+        q_count = q_count.where(t.insurance_id == P())
+
+        q_rows = q_rows.where(t.insurance_id == P())
+
         params.append(args.insurance_id)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_claim WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_claim WHERE {where_sql} ORDER BY claim_date DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+
+    q_rows = q_rows.orderby(t.claim_date, order=Order.desc).limit(P()).offset(P())
+
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -565,16 +628,14 @@ def submit_claim(conn, args):
     claim_id = getattr(args, "claim_id", None)
     if not claim_id:
         err("--claim-id is required")
-    row = conn.execute("SELECT claim_status FROM healthclaw_claim WHERE id = ?", (claim_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_claim")).select(Field("claim_status")).where(Field("id") == P()).get_sql(), (claim_id,)).fetchone()
     if not row:
         err(f"Claim {claim_id} not found")
     if row[0] != "draft":
         err(f"Cannot submit claim with status '{row[0]}'. Must be 'draft'.")
 
     # Verify at least one claim line exists
-    line_count = conn.execute(
-        "SELECT COUNT(*) FROM healthclaw_claim_line WHERE claim_id = ?", (claim_id,)
-    ).fetchone()[0]
+    line_count = conn.execute(Q.from_(Table("healthclaw_claim_line")).select(fn.Count("*")).where(Field("claim_id") == P()).get_sql(), (claim_id,)).fetchone()[0]
     if line_count == 0:
         err("Cannot submit claim with no claim lines. Add at least one claim line first.")
 
@@ -594,13 +655,13 @@ def add_claim_line(conn, args):
     claim_id = getattr(args, "claim_id", None)
     if not claim_id:
         err("--claim-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_claim WHERE id = ?", (claim_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_claim")).select(Field("id")).where(Field("id") == P()).get_sql(), (claim_id,)).fetchone():
         err(f"Claim {claim_id} not found")
 
     charge_id = getattr(args, "charge_id", None)
     if not charge_id:
         err("--charge-id is required")
-    if not conn.execute("SELECT id FROM healthclaw_charge WHERE id = ?", (charge_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_charge")).select(Field("id")).where(Field("id") == P()).get_sql(), (charge_id,)).fetchone():
         err(f"Charge {charge_id} not found")
 
     cpt_code = getattr(args, "cpt_code", None)
@@ -609,15 +670,9 @@ def add_claim_line(conn, args):
 
     cl_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_claim_line (
-            id, claim_id, charge_id, line_number, cpt_code,
-            modifiers, diagnosis_pointers, units,
-            charge_amount, allowed_amount, paid_amount,
-            adjustment_amount, patient_amount,
-            denial_reason, remark_codes, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_claim_line", {"id": P(), "claim_id": P(), "charge_id": P(), "line_number": P(), "cpt_code": P(), "modifiers": P(), "diagnosis_pointers": P(), "units": P(), "charge_amount": P(), "allowed_amount": P(), "paid_amount": P(), "adjustment_amount": P(), "patient_amount": P(), "denial_reason": P(), "remark_codes": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql, (
         cl_id, claim_id, charge_id,
         int(getattr(args, "line_number", None) or 1),
         cpt_code,
@@ -642,21 +697,37 @@ def add_claim_line(conn, args):
 # 14. list-claim-lines
 # ---------------------------------------------------------------------------
 def list_claim_lines(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_claim_line")
+
+    q_count = Q.from_(t).select(fn.Count("*"))
+
+    q_rows = Q.from_(t).select(t.star)
+
+    params = []
+
+
     if getattr(args, "claim_id", None):
-        where.append("claim_id = ?")
+
+        q_count = q_count.where(t.claim_id == P())
+
+        q_rows = q_rows.where(t.claim_id == P())
+
         params.append(args.claim_id)
+
     if getattr(args, "charge_id", None):
-        where.append("charge_id = ?")
+
+        q_count = q_count.where(t.charge_id == P())
+
+        q_rows = q_rows.where(t.charge_id == P())
+
         params.append(args.charge_id)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_claim_line WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_claim_line WHERE {where_sql} ORDER BY line_number ASC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+
+    q_rows = q_rows.orderby(t.line_number, order=Order.asc).limit(P()).offset(P())
+
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -687,12 +758,12 @@ def add_payment_posting(conn, args):
     # Optional FK checks
     claim_id = getattr(args, "claim_id", None)
     if claim_id:
-        if not conn.execute("SELECT id FROM healthclaw_claim WHERE id = ?", (claim_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("healthclaw_claim")).select(Field("id")).where(Field("id") == P()).get_sql(), (claim_id,)).fetchone():
             err(f"Claim {claim_id} not found")
 
     payment_entry_id = getattr(args, "payment_entry_id", None)
     if payment_entry_id:
-        if not conn.execute("SELECT id FROM payment_entry WHERE id = ?", (payment_entry_id,)).fetchone():
+        if not conn.execute(Q.from_(Table("payment_entry")).select(Field("id")).where(Field("id") == P()).get_sql(), (payment_entry_id,)).fetchone():
             err(f"Payment entry {payment_entry_id} not found")
 
     payment_method = getattr(args, "payment_method", None)
@@ -700,14 +771,9 @@ def add_payment_posting(conn, args):
 
     pp_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_payment_posting (
-            id, claim_id, patient_id, posting_type, posting_date,
-            amount, check_number, payer_name, payment_method,
-            payment_entry_id, eob_date, notes, company_id,
-            created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_payment_posting", {"id": P(), "claim_id": P(), "patient_id": P(), "posting_type": P(), "posting_date": P(), "amount": P(), "check_number": P(), "payer_name": P(), "payment_method": P(), "payment_entry_id": P(), "eob_date": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql, (
         pp_id, claim_id, args.patient_id, posting_type, posting_date,
         str(round_currency(to_decimal(amount))),
         getattr(args, "check_number", None),
@@ -727,27 +793,53 @@ def add_payment_posting(conn, args):
 # 16. list-payment-postings
 # ---------------------------------------------------------------------------
 def list_payment_postings(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_payment_posting")
+
+    q_count = Q.from_(t).select(fn.Count("*"))
+
+    q_rows = Q.from_(t).select(t.star)
+
+    params = []
+
+
     if getattr(args, "claim_id", None):
-        where.append("claim_id = ?")
+
+        q_count = q_count.where(t.claim_id == P())
+
+        q_rows = q_rows.where(t.claim_id == P())
+
         params.append(args.claim_id)
+
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?")
+
+        q_count = q_count.where(t.patient_id == P())
+
+        q_rows = q_rows.where(t.patient_id == P())
+
         params.append(args.patient_id)
+
     if getattr(args, "posting_type", None):
-        where.append("posting_type = ?")
+
+        q_count = q_count.where(t.posting_type == P())
+
+        q_rows = q_rows.where(t.posting_type == P())
+
         params.append(args.posting_type)
+
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+
+        q_count = q_count.where(t.company_id == P())
+
+        q_rows = q_rows.where(t.company_id == P())
+
         params.append(args.company_id)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_payment_posting WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_payment_posting WHERE {where_sql} ORDER BY posting_date DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+
+    q_rows = q_rows.orderby(t.posting_date, order=Order.desc).limit(P()).offset(P())
+
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,

@@ -15,6 +15,7 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row
 except ImportError:
     pass
 
@@ -108,7 +109,7 @@ def get_lab_test(conn, args):
     test_id = getattr(args, "lab_test_id", None)
     if not test_id:
         err("--lab-test-id is required")
-    row = conn.execute("SELECT * FROM healthclaw_lab_test WHERE id = ?", (test_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_lab_test")).select(Table("healthclaw_lab_test").star).where(Field("id") == P()).get_sql(), (test_id,)).fetchone()
     if not row:
         err(f"Lab test {test_id} not found")
     ok(row_to_dict(row))
@@ -123,8 +124,7 @@ def add_lab_order(conn, args):
             err(f"--{req.replace('_', '-')} is required")
 
     # Validate lab test exists
-    if not conn.execute("SELECT id FROM healthclaw_lab_test WHERE id = ?",
-                        (args.lab_test_id,)).fetchone():
+    if not conn.execute(Q.from_(Table("healthclaw_lab_test")).select(Field("id")).where(Field("id") == P()).get_sql(), (args.lab_test_id,)).fetchone():
         err(f"Lab test {args.lab_test_id} not found")
 
     priority = getattr(args, "priority", None) or "routine"
@@ -191,7 +191,7 @@ def get_lab_order(conn, args):
     order_id = getattr(args, "lab_order_id", None)
     if not order_id:
         err("--lab-order-id is required")
-    row = conn.execute("SELECT * FROM healthclaw_lab_order WHERE id = ?", (order_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_lab_order")).select(Table("healthclaw_lab_order").star).where(Field("id") == P()).get_sql(), (order_id,)).fetchone()
     if not row:
         err(f"Lab order {order_id} not found")
     ok(row_to_dict(row))
@@ -206,8 +206,7 @@ def add_lab_result(conn, args):
             err(f"--{req.replace('_', '-')} is required")
 
     # Validate lab order exists and get test info
-    order_row = conn.execute("SELECT * FROM healthclaw_lab_order WHERE id = ?",
-                             (args.lab_order_id,)).fetchone()
+    order_row = conn.execute(Q.from_(Table("healthclaw_lab_order")).select(Table("healthclaw_lab_order").star).where(Field("id") == P()).get_sql(), (args.lab_order_id,)).fetchone()
     if not order_row:
         err(f"Lab order {args.lab_order_id} not found")
     order = row_to_dict(order_row)
@@ -217,13 +216,9 @@ def add_lab_result(conn, args):
 
     result_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute(
-        """INSERT INTO healthclaw_lab_result
-           (id, company_id, lab_order_id, lab_test_id, patient_id,
-            result_value, result_unit, reference_range,
-            is_abnormal, is_critical, performed_by, verified_by,
-            result_date, result_notes, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+    sql, _ = insert_row("healthclaw_lab_result", {"id": P(), "company_id": P(), "lab_order_id": P(), "lab_test_id": P(), "patient_id": P(), "result_value": P(), "result_unit": P(), "reference_range": P(), "is_abnormal": P(), "is_critical": P(), "performed_by": P(), "verified_by": P(), "result_date": P(), "result_notes": P(), "created_at": P(), "updated_at": P()})
+
+    conn.execute(sql,
         (result_id, args.company_id, args.lab_order_id, order["lab_test_id"],
          order["patient_id"],
          getattr(args, "result_value", None),
@@ -284,7 +279,7 @@ def get_lab_result(conn, args):
     result_id = getattr(args, "lab_result_id", None)
     if not result_id:
         err("--lab-result-id is required")
-    row = conn.execute("SELECT * FROM healthclaw_lab_result WHERE id = ?", (result_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_lab_result")).select(Table("healthclaw_lab_result").star).where(Field("id") == P()).get_sql(), (result_id,)).fetchone()
     if not row:
         err(f"Lab result {result_id} not found")
     ok(row_to_dict(row))
@@ -298,7 +293,7 @@ def mark_lab_critical(conn, args):
     if not result_id:
         err("--lab-result-id is required")
 
-    row = conn.execute("SELECT * FROM healthclaw_lab_result WHERE id = ?", (result_id,)).fetchone()
+    row = conn.execute(Q.from_(Table("healthclaw_lab_result")).select(Table("healthclaw_lab_result").star).where(Field("id") == P()).get_sql(), (result_id,)).fetchone()
     if not row:
         err(f"Lab result {result_id} not found")
 
