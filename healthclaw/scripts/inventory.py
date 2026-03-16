@@ -17,7 +17,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, dynamic_update, update_row
 
     # Register HealthClaw naming prefixes (inventory domain)
     ENTITY_PREFIXES.setdefault("healthclaw_dispensing", "DISP-")
@@ -97,30 +97,28 @@ def update_formulary(conn, args):
     if not conn.execute(Q.from_(Table("healthclaw_formulary")).select(Field("id")).where(Field("id") == P()).get_sql(), (formulary_id,)).fetchone():
         err(f"Formulary {formulary_id} not found")
 
-    updates, params, changed = [], [], []
+    data, changed = {}, []
     for arg_name, col_name in {
         "formulary_name": "name", "description": "description",
         "effective_date": "effective_date", "expiration_date": "expiration_date",
     }.items():
         val = getattr(args, arg_name, None)
         if val is not None:
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
 
     formulary_status = getattr(args, "formulary_status", None)
     if formulary_status is not None:
         _validate_enum(formulary_status, VALID_FORMULARY_STATUSES, "status")
-        updates.append("status = ?")
-        params.append(formulary_status)
+        data["status"] = formulary_status
         changed.append("status")
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(formulary_id)
-    conn.execute(f"UPDATE healthclaw_formulary SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("healthclaw_formulary", data, {"id": formulary_id})
+    conn.execute(sql, params)
     audit(conn, "healthclaw_formulary", formulary_id, "health-update-formulary", None, {"updated_fields": changed})
     conn.commit()
     ok({"id": formulary_id, "updated_fields": changed})
@@ -225,7 +223,7 @@ def update_formulary_item(conn, args):
     if not conn.execute(Q.from_(Table("healthclaw_formulary_item")).select(Field("id")).where(Field("id") == P()).get_sql(), (fi_id,)).fetchone():
         err(f"Formulary item {fi_id} not found")
 
-    updates, params, changed = [], [], []
+    data, changed = {}, []
     for arg_name, col_name in {
         "ndc_code": "ndc_code", "drug_class": "drug_class",
         "generic_name": "generic_name", "brand_name": "brand_name",
@@ -235,42 +233,37 @@ def update_formulary_item(conn, args):
     }.items():
         val = getattr(args, arg_name, None)
         if val is not None:
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
 
     controlled_schedule = getattr(args, "controlled_schedule", None)
     if controlled_schedule is not None:
         _validate_enum(controlled_schedule, VALID_CONTROLLED_SCHEDULES, "health-controlled-schedule")
-        updates.append("controlled_schedule = ?")
-        params.append(controlled_schedule)
+        data["controlled_schedule"] = controlled_schedule
         changed.append("controlled_schedule")
 
     formulary_tier = getattr(args, "formulary_tier", None)
     if formulary_tier is not None:
         _validate_enum(formulary_tier, VALID_FORMULARY_TIERS, "health-formulary-tier")
-        updates.append("formulary_tier = ?")
-        params.append(formulary_tier)
+        data["formulary_tier"] = formulary_tier
         changed.append("formulary_tier")
 
     fi_status = getattr(args, "formulary_item_status", None)
     if fi_status is not None:
         _validate_enum(fi_status, VALID_FORMULARY_ITEM_STATUSES, "status")
-        updates.append("status = ?")
-        params.append(fi_status)
+        data["status"] = fi_status
         changed.append("status")
 
     if getattr(args, "requires_prior_auth", None) is not None:
-        updates.append("requires_prior_auth = ?")
-        params.append(1 if args.requires_prior_auth == "1" else 0)
+        data["requires_prior_auth"] = 1 if args.requires_prior_auth == "1" else 0
         changed.append("requires_prior_auth")
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(fi_id)
-    conn.execute(f"UPDATE healthclaw_formulary_item SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("healthclaw_formulary_item", data, {"id": fi_id})
+    conn.execute(sql, params)
     audit(conn, "healthclaw_formulary_item", fi_id, "health-update-formulary-item", None, {"updated_fields": changed})
     conn.commit()
     ok({"id": fi_id, "updated_fields": changed})
@@ -388,11 +381,13 @@ def get_dispensing(conn, args):
     data = row_to_dict(row)
 
     # Enrich: patient name
-    pat = conn.execute("SELECT full_name FROM healthclaw_patient WHERE id = ?", (data["patient_id"],)).fetchone()
+    _pat_t = Table("healthclaw_patient")
+    pat = conn.execute(Q.from_(_pat_t).select(_pat_t.full_name).where(_pat_t.id == P()).get_sql(), (data["patient_id"],)).fetchone()
     if pat:
         data["patient_name"] = pat[0]
     # Enrich: dispensed by name
-    emp = conn.execute("SELECT full_name FROM employee WHERE id = ?", (data["dispensed_by_id"],)).fetchone()
+    _emp_t = Table("employee")
+    emp = conn.execute(Q.from_(_emp_t).select(_emp_t.full_name).where(_emp_t.id == P()).get_sql(), (data["dispensed_by_id"],)).fetchone()
     if emp:
         data["dispensed_by_name"] = emp[0]
     ok(data)
@@ -461,10 +456,10 @@ def cancel_dispensing(conn, args):
     if row[0] != "dispensed":
         err(f"Cannot void dispensing with status '{row[0]}'. Must be 'dispensed'.")
 
-    conn.execute(
-        "UPDATE healthclaw_dispensing SET status = 'voided', updated_at = datetime('now') WHERE id = ?",
-        (disp_id,)
-    )
+    sql = update_row("healthclaw_dispensing",
+        data={"status": "voided", "updated_at": LiteralValue("datetime('now')")},
+        where={"id": P()})
+    conn.execute(sql, (disp_id,))
     audit(conn, "healthclaw_dispensing", disp_id, "health-cancel-dispensing", None)
     conn.commit()
     ok({"id": disp_id, "status": "voided"})

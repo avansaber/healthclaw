@@ -15,7 +15,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, dynamic_update, update_row
 
     # Register naming prefixes
     ENTITY_PREFIXES.setdefault("healthclaw_appointment", "APPT-")
@@ -82,12 +82,8 @@ def add_provider_schedule(conn, args):
 
     sched_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_provider_schedule (
-            id, provider_id, day_of_week, start_time, end_time, slot_duration,
-            location, status, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_provider_schedule", {"id": P(), "provider_id": P(), "day_of_week": P(), "start_time": P(), "end_time": P(), "slot_duration": P(), "location": P(), "status": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         sched_id, args.provider_id, day, start, end,
         int(getattr(args, "slot_duration", None) or 30),
         getattr(args, "location", None),
@@ -108,7 +104,7 @@ def update_provider_schedule(conn, args):
     if not conn.execute(Q.from_(Table("healthclaw_provider_schedule")).select(Field("id")).where(Field("id") == P()).get_sql(), (sched_id,)).fetchone():
         err(f"Schedule {sched_id} not found")
 
-    updates, params, changed = [], [], []
+    data, changed = {}, []
     for arg_name, col_name in {
         "start_time": "start_time", "end_time": "end_time",
         "location": "location", "status": "status",
@@ -117,20 +113,18 @@ def update_provider_schedule(conn, args):
         if val is not None:
             if col_name == "status":
                 _validate_enum(val, ("active", "inactive"), "status")
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
     slot = getattr(args, "slot_duration", None)
     if slot is not None:
-        updates.append("slot_duration = ?")
-        params.append(int(slot))
+        data["slot_duration"] = int(slot)
         changed.append("slot_duration")
 
-    if not updates:
+    if not data:
         err("No fields to update")
-    updates.append("updated_at = datetime('now')")
-    params.append(sched_id)
-    conn.execute(f"UPDATE healthclaw_provider_schedule SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("healthclaw_provider_schedule", data, {"id": sched_id})
+    conn.execute(sql, params)
     audit(conn, "healthclaw_provider_schedule", sched_id, "health-update-provider-schedule", getattr(args, "company_id", None))
     conn.commit()
     ok({"id": sched_id, "updated_fields": changed})
@@ -140,20 +134,23 @@ def update_provider_schedule(conn, args):
 # 3. list-provider-schedules
 # ---------------------------------------------------------------------------
 def list_provider_schedules(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_provider_schedule")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "provider_id", None):
-        where.append("provider_id = ?")
+        q_count = q_count.where(t.provider_id == P())
+        q_rows = q_rows.where(t.provider_id == P())
         params.append(args.provider_id)
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+        q_count = q_count.where(t.company_id == P())
+        q_rows = q_rows.where(t.company_id == P())
         params.append(args.company_id)
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_provider_schedule WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_provider_schedule WHERE {where_sql} ORDER BY day_of_week, start_time LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.day_of_week, order=Order.asc).orderby(t.start_time, order=Order.asc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total, "limit": args.limit, "offset": args.offset, "has_more": (args.offset + args.limit) < total})
 
 
@@ -171,12 +168,8 @@ def add_schedule_block(conn, args):
 
     block_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_schedule_block (
-            id, provider_id, block_date, start_time, end_time, reason,
-            notes, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_schedule_block", {"id": P(), "provider_id": P(), "block_date": P(), "start_time": P(), "end_time": P(), "reason": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         block_id, args.provider_id, block_date,
         getattr(args, "start_time", None),
         getattr(args, "end_time", None),
@@ -192,20 +185,23 @@ def add_schedule_block(conn, args):
 # 5. list-schedule-blocks
 # ---------------------------------------------------------------------------
 def list_schedule_blocks(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_schedule_block")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "provider_id", None):
-        where.append("provider_id = ?")
+        q_count = q_count.where(t.provider_id == P())
+        q_rows = q_rows.where(t.provider_id == P())
         params.append(args.provider_id)
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+        q_count = q_count.where(t.company_id == P())
+        q_rows = q_rows.where(t.company_id == P())
         params.append(args.company_id)
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_schedule_block WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_schedule_block WHERE {where_sql} ORDER BY block_date DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.block_date, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total, "limit": args.limit, "offset": args.offset, "has_more": (args.offset + args.limit) < total})
 
 
@@ -231,14 +227,8 @@ def add_appointment(conn, args):
     appt_id = str(uuid.uuid4())
     naming = get_next_name(conn, "healthclaw_appointment", company_id=args.company_id)
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_appointment (
-            id, naming_series, patient_id, provider_id, appointment_date,
-            start_time, end_time, duration_minutes, appointment_type,
-            chief_complaint, location, status, notes, company_id,
-            created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_appointment", {"id": P(), "naming_series": P(), "patient_id": P(), "provider_id": P(), "appointment_date": P(), "start_time": P(), "end_time": P(), "duration_minutes": P(), "appointment_type": P(), "chief_complaint": P(), "location": P(), "status": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         appt_id, naming, args.patient_id, args.provider_id, appt_date,
         start, end,
         int(getattr(args, "duration_minutes", None) or 30),
@@ -263,7 +253,7 @@ def update_appointment(conn, args):
     if not conn.execute(Q.from_(Table("healthclaw_appointment")).select(Field("id")).where(Field("id") == P()).get_sql(), (appt_id,)).fetchone():
         err(f"Appointment {appt_id} not found")
 
-    updates, params, changed = [], [], []
+    data, changed = {}, []
     for arg_name, col_name in {
         "appointment_date": "appointment_date", "start_time": "start_time",
         "end_time": "end_time", "appointment_type": "appointment_type",
@@ -274,27 +264,24 @@ def update_appointment(conn, args):
         if val is not None:
             if col_name == "appointment_type":
                 _validate_enum(val, VALID_APPT_TYPES, "health-appointment-type")
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
     dur = getattr(args, "duration_minutes", None)
     if dur is not None:
-        updates.append("duration_minutes = ?")
-        params.append(int(dur))
+        data["duration_minutes"] = int(dur)
         changed.append("duration_minutes")
     # Provider reassignment
     new_provider = getattr(args, "new_provider_id", None)
     if new_provider:
         _validate_provider(conn, new_provider)
-        updates.append("provider_id = ?")
-        params.append(new_provider)
+        data["provider_id"] = new_provider
         changed.append("provider_id")
 
-    if not updates:
+    if not data:
         err("No fields to update")
-    updates.append("updated_at = datetime('now')")
-    params.append(appt_id)
-    conn.execute(f"UPDATE healthclaw_appointment SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("healthclaw_appointment", data, {"id": appt_id})
+    conn.execute(sql, params)
     audit(conn, "healthclaw_appointment", appt_id, "health-update-appointment", None, {"updated_fields": changed})
     conn.commit()
     ok({"id": appt_id, "updated_fields": changed})
@@ -313,11 +300,13 @@ def get_appointment(conn, args):
     data = row_to_dict(row)
 
     # Enrich: patient name
-    pat = conn.execute("SELECT full_name FROM healthclaw_patient WHERE id = ?", (data["patient_id"],)).fetchone()
+    _pat_t = Table("healthclaw_patient")
+    pat = conn.execute(Q.from_(_pat_t).select(_pat_t.full_name).where(_pat_t.id == P()).get_sql(), (data["patient_id"],)).fetchone()
     if pat:
         data["patient_name"] = pat[0]
     # Enrich: provider name
-    prov = conn.execute("SELECT full_name FROM employee WHERE id = ?", (data["provider_id"],)).fetchone()
+    _emp_t = Table("employee")
+    prov = conn.execute(Q.from_(_emp_t).select(_emp_t.full_name).where(_emp_t.id == P()).get_sql(), (data["provider_id"],)).fetchone()
     if prov:
         data["provider_name"] = prov[0]
     ok(data)
@@ -327,34 +316,41 @@ def get_appointment(conn, args):
 # 9. list-appointments
 # ---------------------------------------------------------------------------
 def list_appointments(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_appointment")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+        q_count = q_count.where(t.company_id == P())
+        q_rows = q_rows.where(t.company_id == P())
         params.append(args.company_id)
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?")
+        q_count = q_count.where(t.patient_id == P())
+        q_rows = q_rows.where(t.patient_id == P())
         params.append(args.patient_id)
     if getattr(args, "provider_id", None):
-        where.append("provider_id = ?")
+        q_count = q_count.where(t.provider_id == P())
+        q_rows = q_rows.where(t.provider_id == P())
         params.append(args.provider_id)
     if getattr(args, "appointment_date", None):
-        where.append("appointment_date = ?")
+        q_count = q_count.where(t.appointment_date == P())
+        q_rows = q_rows.where(t.appointment_date == P())
         params.append(args.appointment_date)
     if getattr(args, "status", None):
-        where.append("status = ?")
+        q_count = q_count.where(t.status == P())
+        q_rows = q_rows.where(t.status == P())
         params.append(args.status)
     if getattr(args, "search", None):
-        # Search joins patient name
-        where.append("patient_id IN (SELECT id FROM healthclaw_patient WHERE full_name LIKE ?)")
+        # Search joins patient name via subquery
+        crit = LiteralValue("\"patient_id\" IN (SELECT \"id\" FROM \"healthclaw_patient\" WHERE \"full_name\" LIKE ?)")
+        q_count = q_count.where(crit)
+        q_rows = q_rows.where(crit)
         params.append(f"%{args.search}%")
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_appointment WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_appointment WHERE {where_sql} ORDER BY appointment_date DESC, start_time ASC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.appointment_date, order=Order.desc).orderby(t.start_time, order=Order.asc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total, "limit": args.limit, "offset": args.offset, "has_more": (args.offset + args.limit) < total})
 
 
@@ -372,10 +368,10 @@ def check_in_appointment(conn, args):
         err(f"Cannot check in appointment with status '{row[0]}'. Must be scheduled or confirmed.")
 
     now = _now_iso()
-    conn.execute(
-        "UPDATE healthclaw_appointment SET status = 'checked_in', check_in_time = ?, updated_at = datetime('now') WHERE id = ?",
-        (now, appt_id)
-    )
+    sql = update_row("healthclaw_appointment",
+        data={"status": "checked_in", "check_in_time": P(), "updated_at": LiteralValue("datetime('now')")},
+        where={"id": P()})
+    conn.execute(sql, (now, appt_id))
     audit(conn, "healthclaw_appointment", appt_id, "health-check-in-appointment", None)
     conn.commit()
     ok({"id": appt_id, "status": "checked_in", "check_in_time": now})
@@ -395,10 +391,10 @@ def check_out_appointment(conn, args):
         err(f"Cannot check out appointment with status '{row[0]}'. Must be checked_in or in_progress.")
 
     now = _now_iso()
-    conn.execute(
-        "UPDATE healthclaw_appointment SET status = 'completed', check_out_time = ?, updated_at = datetime('now') WHERE id = ?",
-        (now, appt_id)
-    )
+    sql = update_row("healthclaw_appointment",
+        data={"status": "completed", "check_out_time": P(), "updated_at": LiteralValue("datetime('now')")},
+        where={"id": P()})
+    conn.execute(sql, (now, appt_id))
     audit(conn, "healthclaw_appointment", appt_id, "health-check-out-appointment", None)
     conn.commit()
     ok({"id": appt_id, "status": "completed", "check_out_time": now})
@@ -417,10 +413,10 @@ def cancel_appointment(conn, args):
     if row[0] in ("completed", "cancelled"):
         err(f"Cannot cancel appointment with status '{row[0]}'.")
 
-    conn.execute(
-        "UPDATE healthclaw_appointment SET status = 'cancelled', cancellation_reason = ?, updated_at = datetime('now') WHERE id = ?",
-        (getattr(args, "cancellation_reason", None), appt_id)
-    )
+    sql = update_row("healthclaw_appointment",
+        data={"status": "cancelled", "cancellation_reason": P(), "updated_at": LiteralValue("datetime('now')")},
+        where={"id": P()})
+    conn.execute(sql, (getattr(args, "cancellation_reason", None), appt_id))
     audit(conn, "healthclaw_appointment", appt_id, "health-cancel-appointment", None)
     conn.commit()
     ok({"id": appt_id, "status": "cancelled"})
@@ -438,13 +434,8 @@ def add_waitlist(conn, args):
 
     wl_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute("""
-        INSERT INTO healthclaw_waitlist (
-            id, patient_id, provider_id, preferred_date_start, preferred_date_end,
-            preferred_time_start, preferred_time_end, appointment_type,
-            priority, status, notes, company_id, created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
+    sql, _ = insert_row("healthclaw_waitlist", {"id": P(), "patient_id": P(), "provider_id": P(), "preferred_date_start": P(), "preferred_date_end": P(), "preferred_time_start": P(), "preferred_time_end": P(), "appointment_type": P(), "priority": P(), "status": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql, (
         wl_id, args.patient_id,
         getattr(args, "provider_id", None),
         getattr(args, "preferred_date_start", None),
@@ -465,26 +456,31 @@ def add_waitlist(conn, args):
 # 14. list-waitlist
 # ---------------------------------------------------------------------------
 def list_waitlist(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_waitlist")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+        q_count = q_count.where(t.company_id == P())
+        q_rows = q_rows.where(t.company_id == P())
         params.append(args.company_id)
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?")
+        q_count = q_count.where(t.patient_id == P())
+        q_rows = q_rows.where(t.patient_id == P())
         params.append(args.patient_id)
     if getattr(args, "provider_id", None):
-        where.append("provider_id = ?")
+        q_count = q_count.where(t.provider_id == P())
+        q_rows = q_rows.where(t.provider_id == P())
         params.append(args.provider_id)
     if getattr(args, "status", None):
-        where.append("status = ?")
+        q_count = q_count.where(t.status == P())
+        q_rows = q_rows.where(t.status == P())
         params.append(args.status)
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_waitlist WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_waitlist WHERE {where_sql} ORDER BY priority DESC, created_at ASC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.priority, order=Order.desc).orderby(t.created_at, order=Order.asc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total, "limit": args.limit, "offset": args.offset, "has_more": (args.offset + args.limit) < total})
 
 

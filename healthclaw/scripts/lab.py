@@ -17,7 +17,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, dynamic_update, update_row
 
     # Register HealthClaw naming prefixes (lab domain)
     ENTITY_PREFIXES.setdefault("healthclaw_lab_order", "LAB-")
@@ -129,7 +129,7 @@ def update_lab_order(conn, args):
     if not conn.execute(Q.from_(Table("healthclaw_lab_order")).select(Field("id")).where(Field("id") == P()).get_sql(), (lab_order_id,)).fetchone():
         err(f"Lab order {lab_order_id} not found")
 
-    updates, params, changed = [], [], []
+    data, changed = {}, []
     for arg_name, col_name in {
         "clinical_indication": "clinical_indication",
         "specimen_type": "specimen_type",
@@ -139,35 +139,31 @@ def update_lab_order(conn, args):
     }.items():
         val = getattr(args, arg_name, None)
         if val is not None:
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
 
     priority = getattr(args, "priority", None)
     if priority is not None:
         _validate_enum(priority, VALID_LAB_PRIORITIES, "priority")
-        updates.append("priority = ?")
-        params.append(priority)
+        data["priority"] = priority
         changed.append("priority")
 
     lab_order_status = getattr(args, "lab_order_status", None)
     if lab_order_status is not None:
         _validate_enum(lab_order_status, VALID_LAB_ORDER_STATUSES, "status")
-        updates.append("status = ?")
-        params.append(lab_order_status)
+        data["status"] = lab_order_status
         changed.append("status")
 
     if getattr(args, "fasting_required", None) is not None:
-        updates.append("fasting_required = ?")
-        params.append(1 if args.fasting_required == "1" else 0)
+        data["fasting_required"] = 1 if args.fasting_required == "1" else 0
         changed.append("fasting_required")
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(lab_order_id)
-    conn.execute(f"UPDATE healthclaw_lab_order SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("healthclaw_lab_order", data, {"id": lab_order_id})
+    conn.execute(sql, params)
     audit(conn, "healthclaw_lab_order", lab_order_id, "health-update-lab-order", None, {"updated_fields": changed})
     conn.commit()
     ok({"id": lab_order_id, "updated_fields": changed})
@@ -186,11 +182,13 @@ def get_lab_order(conn, args):
     data = row_to_dict(row)
 
     # Enrich: patient name
-    pat = conn.execute("SELECT full_name FROM healthclaw_patient WHERE id = ?", (data["patient_id"],)).fetchone()
+    _pat_t = Table("healthclaw_patient")
+    pat = conn.execute(Q.from_(_pat_t).select(_pat_t.full_name).where(_pat_t.id == P()).get_sql(), (data["patient_id"],)).fetchone()
     if pat:
         data["patient_name"] = pat[0]
     # Enrich: ordering provider name
-    prov = conn.execute("SELECT full_name FROM employee WHERE id = ?", (data["ordering_provider_id"],)).fetchone()
+    _emp_t = Table("employee")
+    prov = conn.execute(Q.from_(_emp_t).select(_emp_t.full_name).where(_emp_t.id == P()).get_sql(), (data["ordering_provider_id"],)).fetchone()
     if prov:
         data["ordering_provider_name"] = prov[0]
     # Enrich: test count
@@ -493,7 +491,7 @@ def update_imaging_order(conn, args):
     if not conn.execute(Q.from_(Table("healthclaw_imaging_order")).select(Field("id")).where(Field("id") == P()).get_sql(), (img_order_id,)).fetchone():
         err(f"Imaging order {img_order_id} not found")
 
-    updates, params, changed = [], [], []
+    data, changed = {}, []
     for arg_name, col_name in {
         "body_part": "body_part",
         "cpt_code": "cpt_code",
@@ -503,49 +501,43 @@ def update_imaging_order(conn, args):
     }.items():
         val = getattr(args, arg_name, None)
         if val is not None:
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
 
     modality = getattr(args, "modality", None)
     if modality is not None:
         _validate_enum(modality, VALID_IMAGING_MODALITIES, "modality")
-        updates.append("modality = ?")
-        params.append(modality)
+        data["modality"] = modality
         changed.append("modality")
 
     laterality = getattr(args, "laterality", None)
     if laterality is not None:
         _validate_enum(laterality, VALID_LATERALITIES, "laterality")
-        updates.append("laterality = ?")
-        params.append(laterality)
+        data["laterality"] = laterality
         changed.append("laterality")
 
     priority = getattr(args, "priority", None)
     if priority is not None:
         _validate_enum(priority, VALID_IMAGING_PRIORITIES, "priority")
-        updates.append("priority = ?")
-        params.append(priority)
+        data["priority"] = priority
         changed.append("priority")
 
     imaging_order_status = getattr(args, "imaging_order_status", None)
     if imaging_order_status is not None:
         _validate_enum(imaging_order_status, VALID_IMAGING_ORDER_STATUSES, "status")
-        updates.append("status = ?")
-        params.append(imaging_order_status)
+        data["status"] = imaging_order_status
         changed.append("status")
 
     if getattr(args, "contrast", None) is not None:
-        updates.append("contrast = ?")
-        params.append(1 if args.contrast == "1" else 0)
+        data["contrast"] = 1 if args.contrast == "1" else 0
         changed.append("contrast")
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(img_order_id)
-    conn.execute(f"UPDATE healthclaw_imaging_order SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("healthclaw_imaging_order", data, {"id": img_order_id})
+    conn.execute(sql, params)
     audit(conn, "healthclaw_imaging_order", img_order_id, "health-update-imaging-order", None, {"updated_fields": changed})
     conn.commit()
     ok({"id": img_order_id, "updated_fields": changed})
@@ -658,7 +650,7 @@ def update_imaging_result(conn, args):
     if not conn.execute(Q.from_(Table("healthclaw_imaging_result")).select(Field("id")).where(Field("id") == P()).get_sql(), (ir_id,)).fetchone():
         err(f"Imaging result {ir_id} not found")
 
-    updates, params, changed = [], [], []
+    data, changed = {}, []
     for arg_name, col_name in {
         "findings": "findings", "impression": "impression",
         "recommendation": "recommendation", "addendum": "addendum",
@@ -666,36 +658,32 @@ def update_imaging_result(conn, args):
     }.items():
         val = getattr(args, arg_name, None)
         if val is not None:
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
 
     imaging_result_status = getattr(args, "imaging_result_status", None)
     if imaging_result_status is not None:
         _validate_enum(imaging_result_status, VALID_IMAGING_RESULT_STATUSES, "status")
-        updates.append("status = ?")
-        params.append(imaging_result_status)
+        data["status"] = imaging_result_status
         changed.append("status")
 
     radiologist_id = getattr(args, "radiologist_id", None)
     if radiologist_id is not None:
         if not conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (radiologist_id,)).fetchone():
             err(f"Radiologist (employee) {radiologist_id} not found")
-        updates.append("radiologist_id = ?")
-        params.append(radiologist_id)
+        data["radiologist_id"] = radiologist_id
         changed.append("radiologist_id")
 
     if getattr(args, "critical_finding", None) is not None:
-        updates.append("critical_finding = ?")
-        params.append(1 if args.critical_finding == "1" else 0)
+        data["critical_finding"] = 1 if args.critical_finding == "1" else 0
         changed.append("critical_finding")
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(ir_id)
-    conn.execute(f"UPDATE healthclaw_imaging_result SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("healthclaw_imaging_result", data, {"id": ir_id})
+    conn.execute(sql, params)
     audit(conn, "healthclaw_imaging_result", ir_id, "health-update-imaging-result", None, {"updated_fields": changed})
     conn.commit()
     ok({"id": ir_id, "updated_fields": changed})

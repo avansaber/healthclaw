@@ -15,7 +15,7 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, update_row
 except ImportError:
     pass
 
@@ -56,12 +56,8 @@ def add_lab_test(conn, args):
 
     test_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute(
-        """INSERT INTO healthclaw_lab_test
-           (id, company_id, test_name, test_code, loinc_code, category,
-            specimen_type, reference_range, unit, turnaround_hours,
-            base_price, is_active, notes, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)""",
+    sql, _ = insert_row("healthclaw_lab_test", {"id": P(), "company_id": P(), "test_name": P(), "test_code": P(), "loinc_code": P(), "category": P(), "specimen_type": P(), "reference_range": P(), "unit": P(), "turnaround_hours": P(), "base_price": P(), "is_active": P(), "notes": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql,
         (test_id, args.company_id, args.test_name,
          getattr(args, "test_code", None),
          getattr(args, "loinc_code", None),
@@ -69,7 +65,7 @@ def add_lab_test(conn, args):
          getattr(args, "specimen_type", None),
          getattr(args, "reference_range", None),
          getattr(args, "unit", None),
-         turnaround_hours, base_price,
+         turnaround_hours, base_price, 1,
          getattr(args, "notes", None), now, now)
     )
     audit(conn, "healthclaw_lab_test", test_id, "health-add-lab-test", args.company_id)
@@ -81,23 +77,26 @@ def add_lab_test(conn, args):
 # 2. list-lab-tests
 # ---------------------------------------------------------------------------
 def list_lab_tests(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_lab_test")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "company_id", None):
-        where.append("company_id = ?"); params.append(args.company_id)
+        q_count = q_count.where(t.company_id == P()); q_rows = q_rows.where(t.company_id == P()); params.append(args.company_id)
     if getattr(args, "category", None):
-        where.append("category = ?"); params.append(args.category)
+        q_count = q_count.where(t.category == P()); q_rows = q_rows.where(t.category == P()); params.append(args.category)
     if getattr(args, "search", None):
-        where.append("(test_name LIKE ? OR test_code LIKE ? OR loinc_code LIKE ?)")
         s = f"%{args.search}%"
+        crit = LiteralValue("(\"test_name\" LIKE ? OR \"test_code\" LIKE ? OR \"loinc_code\" LIKE ?)")
+        q_count = q_count.where(crit); q_rows = q_rows.where(crit)
         params.extend([s, s, s])
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_lab_test WHERE {where_sql}", params).fetchone()[0]
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
     limit = getattr(args, "limit", None) or 50
     offset = getattr(args, "offset", None) or 0
-    params.extend([limit, offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_lab_test WHERE {where_sql} ORDER BY test_name ASC LIMIT ? OFFSET ?", params
-    ).fetchall()
+    q_rows = q_rows.orderby(t.test_name, order=Order.asc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [limit, offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": limit, "offset": offset, "has_more": (offset + limit) < total})
 
@@ -134,14 +133,10 @@ def add_lab_order(conn, args):
 
     order_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute(
-        """INSERT INTO healthclaw_lab_order
-           (id, company_id, patient_id, ordering_provider, lab_test_id,
-            order_date, priority, order_status, clinical_notes,
-            fasting_required, notes, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'ordered', ?, ?, ?, ?, ?)""",
+    sql, _ = insert_row("healthclaw_lab_order", {"id": P(), "company_id": P(), "patient_id": P(), "ordering_provider": P(), "lab_test_id": P(), "order_date": P(), "priority": P(), "order_status": P(), "clinical_notes": P(), "fasting_required": P(), "notes": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql,
         (order_id, args.company_id, args.patient_id, args.ordering_provider,
-         args.lab_test_id, args.order_date, priority,
+         args.lab_test_id, args.order_date, priority, "ordered",
          getattr(args, "clinical_notes", None),
          fasting_required,
          getattr(args, "notes", None), now, now)
@@ -156,30 +151,33 @@ def add_lab_order(conn, args):
 # 5. list-lab-orders
 # ---------------------------------------------------------------------------
 def list_lab_orders(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_lab_order")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "company_id", None):
-        where.append("company_id = ?"); params.append(args.company_id)
+        q_count = q_count.where(t.company_id == P()); q_rows = q_rows.where(t.company_id == P()); params.append(args.company_id)
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?"); params.append(args.patient_id)
+        q_count = q_count.where(t.patient_id == P()); q_rows = q_rows.where(t.patient_id == P()); params.append(args.patient_id)
     if getattr(args, "lab_test_id", None):
-        where.append("lab_test_id = ?"); params.append(args.lab_test_id)
+        q_count = q_count.where(t.lab_test_id == P()); q_rows = q_rows.where(t.lab_test_id == P()); params.append(args.lab_test_id)
     order_status = getattr(args, "order_status", None)
     if order_status:
-        where.append("order_status = ?"); params.append(order_status)
+        q_count = q_count.where(t.order_status == P()); q_rows = q_rows.where(t.order_status == P()); params.append(order_status)
     if getattr(args, "priority", None):
-        where.append("priority = ?"); params.append(args.priority)
+        q_count = q_count.where(t.priority == P()); q_rows = q_rows.where(t.priority == P()); params.append(args.priority)
     if getattr(args, "search", None):
-        where.append("(clinical_notes LIKE ? OR notes LIKE ?)")
         s = f"%{args.search}%"
+        crit = LiteralValue("(\"clinical_notes\" LIKE ? OR \"notes\" LIKE ?)")
+        q_count = q_count.where(crit); q_rows = q_rows.where(crit)
         params.extend([s, s])
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_lab_order WHERE {where_sql}", params).fetchone()[0]
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
     limit = getattr(args, "limit", None) or 50
     offset = getattr(args, "offset", None) or 0
-    params.extend([limit, offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_lab_order WHERE {where_sql} ORDER BY order_date DESC LIMIT ? OFFSET ?", params
-    ).fetchall()
+    q_rows = q_rows.orderby(t.order_date, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [limit, offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": limit, "offset": offset, "has_more": (offset + limit) < total})
 
@@ -232,10 +230,10 @@ def add_lab_result(conn, args):
     )
 
     # Update order status to completed
-    conn.execute(
-        "UPDATE healthclaw_lab_order SET order_status = 'completed', completed_at = ?, updated_at = datetime('now') WHERE id = ?",
-        (now, args.lab_order_id)
-    )
+    _upd_sql = update_row("healthclaw_lab_order",
+        data={"order_status": "completed", "completed_at": P(), "updated_at": LiteralValue("datetime('now')")},
+        where={"id": P()})
+    conn.execute(_upd_sql, (now, args.lab_order_id))
 
     audit(conn, "healthclaw_lab_result", result_id, "health-add-lab-result", args.company_id)
     conn.commit()
@@ -247,27 +245,29 @@ def add_lab_result(conn, args):
 # 8. list-lab-results
 # ---------------------------------------------------------------------------
 def list_lab_results(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_lab_result")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "company_id", None):
-        where.append("company_id = ?"); params.append(args.company_id)
+        q_count = q_count.where(t.company_id == P()); q_rows = q_rows.where(t.company_id == P()); params.append(args.company_id)
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?"); params.append(args.patient_id)
+        q_count = q_count.where(t.patient_id == P()); q_rows = q_rows.where(t.patient_id == P()); params.append(args.patient_id)
     if getattr(args, "lab_order_id", None):
-        where.append("lab_order_id = ?"); params.append(args.lab_order_id)
+        q_count = q_count.where(t.lab_order_id == P()); q_rows = q_rows.where(t.lab_order_id == P()); params.append(args.lab_order_id)
     if getattr(args, "lab_test_id", None):
-        where.append("lab_test_id = ?"); params.append(args.lab_test_id)
+        q_count = q_count.where(t.lab_test_id == P()); q_rows = q_rows.where(t.lab_test_id == P()); params.append(args.lab_test_id)
     if getattr(args, "is_abnormal", None):
-        where.append("is_abnormal = 1")
+        q_count = q_count.where(t.is_abnormal == 1); q_rows = q_rows.where(t.is_abnormal == 1)
     if getattr(args, "is_critical", None):
-        where.append("is_critical = 1")
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_lab_result WHERE {where_sql}", params).fetchone()[0]
+        q_count = q_count.where(t.is_critical == 1); q_rows = q_rows.where(t.is_critical == 1)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
     limit = getattr(args, "limit", None) or 50
     offset = getattr(args, "offset", None) or 0
-    params.extend([limit, offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_lab_result WHERE {where_sql} ORDER BY result_date DESC LIMIT ? OFFSET ?", params
-    ).fetchall()
+    q_rows = q_rows.orderby(t.result_date, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [limit, offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": limit, "offset": offset, "has_more": (offset + limit) < total})
 
@@ -297,10 +297,10 @@ def mark_lab_critical(conn, args):
     if not row:
         err(f"Lab result {result_id} not found")
 
-    conn.execute(
-        "UPDATE healthclaw_lab_result SET is_critical = 1, is_abnormal = 1, updated_at = datetime('now') WHERE id = ?",
-        (result_id,)
-    )
+    _upd_sql = update_row("healthclaw_lab_result",
+        data={"is_critical": 1, "is_abnormal": 1, "updated_at": LiteralValue("datetime('now')")},
+        where={"id": P()})
+    conn.execute(_upd_sql, (result_id,))
     audit(conn, "healthclaw_lab_result", result_id, "health-mark-lab-critical",
           getattr(args, "company_id", None) or row_to_dict(row).get("company_id"))
     conn.commit()
@@ -323,6 +323,7 @@ def lab_turnaround_report(conn, args):
         where.append("lo.order_date <= ?"); params.append(date_to)
     where_sql = " AND ".join(where)
 
+    # PyPika: skipped — complex JOIN with julianday calculation
     rows = conn.execute(
         f"""SELECT lo.*, lt.test_name, lt.turnaround_hours as expected_hours,
             ROUND((julianday(lo.completed_at) - julianday(lo.order_date)) * 24, 1) as actual_hours
@@ -383,6 +384,7 @@ def abnormal_results_report(conn, args):
         where.append("lr.result_date <= ?"); params.append(date_to)
     where_sql = " AND ".join(where)
 
+    # PyPika: skipped — complex JOIN report query
     rows = conn.execute(
         f"""SELECT lr.*, lt.test_name, lt.category
             FROM healthclaw_lab_result lr

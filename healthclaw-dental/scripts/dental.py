@@ -16,6 +16,7 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
+    from erpclaw_lib.vendor.pypika.terms import LiteralValue
 except ImportError:
     pass
 
@@ -163,12 +164,9 @@ def get_tooth_chart(conn, args):
     t = Table("healthclaw_tooth_chart")
     q = (Q.from_(t).select(t.star)
          .where(t.patient_id == P())
-         .where(t.status == "active")
-         .orderby(Field("CAST(tooth_number AS INTEGER)")))
-    rows = conn.execute(
-        "SELECT * FROM \"healthclaw_tooth_chart\" WHERE \"patient_id\"=? AND \"status\"='active' ORDER BY CAST(tooth_number AS INTEGER)",
-        (patient_id,)
-    ).fetchall()
+         .where(t.status == P())
+         .orderby(LiteralValue("CAST(\"tooth_number\" AS INTEGER)")))
+    rows = conn.execute(q.get_sql(), (patient_id, "active")).fetchall()
     chart = {}
     for r in rows:
         d = row_to_dict(r)

@@ -17,7 +17,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, dynamic_update, update_row
 
     # Register HealthClaw naming prefixes (billing domain)
     ENTITY_PREFIXES.setdefault("healthclaw_charge", "CHG-")
@@ -110,37 +110,34 @@ def update_fee_schedule(conn, args):
     if not conn.execute(Q.from_(Table("healthclaw_fee_schedule")).select(Field("id")).where(Field("id") == P()).get_sql(), (fs_id,)).fetchone():
         err(f"Fee schedule {fs_id} not found")
 
-    updates, params, changed = [], [], []
+    data, changed = {}, []
     for arg_name, col_name in {
         "fee_schedule_name": "name", "description": "description",
         "effective_date": "effective_date", "expiration_date": "expiration_date",
     }.items():
         val = getattr(args, arg_name, None)
         if val is not None:
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
 
     payer_type = getattr(args, "payer_type", None)
     if payer_type is not None:
         _validate_enum(payer_type, VALID_PAYER_TYPES, "health-payer-type")
-        updates.append("payer_type = ?")
-        params.append(payer_type)
+        data["payer_type"] = payer_type
         changed.append("payer_type")
 
     fee_schedule_status = getattr(args, "fee_schedule_status", None)
     if fee_schedule_status is not None:
         _validate_enum(fee_schedule_status, VALID_FEE_SCHEDULE_STATUSES, "status")
-        updates.append("status = ?")
-        params.append(fee_schedule_status)
+        data["status"] = fee_schedule_status
         changed.append("status")
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(fs_id)
-    conn.execute(f"UPDATE healthclaw_fee_schedule SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("healthclaw_fee_schedule", data, {"id": fs_id})
+    conn.execute(sql, params)
     audit(conn, "healthclaw_fee_schedule", fs_id, "health-update-fee-schedule", None, {"updated_fields": changed})
     conn.commit()
     ok({"id": fs_id, "updated_fields": changed})
@@ -452,7 +449,7 @@ def update_claim(conn, args):
     if not conn.execute(Q.from_(Table("healthclaw_claim")).select(Field("id")).where(Field("id") == P()).get_sql(), (claim_id,)).fetchone():
         err(f"Claim {claim_id} not found")
 
-    updates, params, changed = [], [], []
+    data, changed = {}, []
     for arg_name, col_name in {
         "claim_date": "claim_date",
         "place_of_service": "place_of_service",
@@ -463,30 +460,26 @@ def update_claim(conn, args):
     }.items():
         val = getattr(args, arg_name, None)
         if val is not None:
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
 
     claim_type = getattr(args, "claim_type", None)
     if claim_type is not None:
         _validate_enum(claim_type, VALID_CLAIM_TYPES, "health-claim-type")
-        updates.append("claim_type = ?")
-        params.append(claim_type)
+        data["claim_type"] = claim_type
         changed.append("claim_type")
 
     claim_status = getattr(args, "claim_status", None)
     if claim_status is not None:
         _validate_enum(claim_status, VALID_CLAIM_STATUSES, "status")
-        updates.append("claim_status = ?")
-        params.append(claim_status)
+        data["claim_status"] = claim_status
         changed.append("claim_status")
 
     # Money fields
     for mf in ("total_charge", "total_allowed", "total_paid", "patient_responsibility", "adjustment_amount"):
         val = getattr(args, mf, None)
         if val is not None:
-            updates.append(f"{mf} = ?")
-            params.append(str(round_currency(to_decimal(val))))
+            data[mf] = str(round_currency(to_decimal(val)))
             changed.append(mf)
 
     # Optional FK updates
@@ -494,38 +487,34 @@ def update_claim(conn, args):
     if billing_provider_id is not None:
         if not conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (billing_provider_id,)).fetchone():
             err(f"Billing provider {billing_provider_id} not found")
-        updates.append("billing_provider_id = ?")
-        params.append(billing_provider_id)
+        data["billing_provider_id"] = billing_provider_id
         changed.append("billing_provider_id")
 
     rendering_provider_id = getattr(args, "rendering_provider_id", None)
     if rendering_provider_id is not None:
         if not conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (rendering_provider_id,)).fetchone():
             err(f"Rendering provider {rendering_provider_id} not found")
-        updates.append("rendering_provider_id = ?")
-        params.append(rendering_provider_id)
+        data["rendering_provider_id"] = rendering_provider_id
         changed.append("rendering_provider_id")
 
     prior_auth_id = getattr(args, "prior_auth_id", None)
     if prior_auth_id is not None:
         if not conn.execute(Q.from_(Table("healthclaw_prior_auth")).select(Field("id")).where(Field("id") == P()).get_sql(), (prior_auth_id,)).fetchone():
             err(f"Prior auth {prior_auth_id} not found")
-        updates.append("prior_auth_id = ?")
-        params.append(prior_auth_id)
+        data["prior_auth_id"] = prior_auth_id
         changed.append("prior_auth_id")
 
     sales_invoice_id = getattr(args, "sales_invoice_id", None)
     if sales_invoice_id is not None:
-        updates.append("sales_invoice_id = ?")
-        params.append(sales_invoice_id)
+        data["sales_invoice_id"] = sales_invoice_id
         changed.append("sales_invoice_id")
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(claim_id)
-    conn.execute(f"UPDATE healthclaw_claim SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("healthclaw_claim", data, {"id": claim_id})
+    conn.execute(sql, params)
     audit(conn, "healthclaw_claim", claim_id, "health-update-claim", None, {"updated_fields": changed})
     conn.commit()
     ok({"id": claim_id, "updated_fields": changed})
@@ -544,18 +533,21 @@ def get_claim(conn, args):
     data = row_to_dict(row)
 
     # Enrich: patient name
-    pat = conn.execute("SELECT full_name FROM healthclaw_patient WHERE id = ?", (data["patient_id"],)).fetchone()
+    _pat_t = Table("healthclaw_patient")
+    pat = conn.execute(Q.from_(_pat_t).select(_pat_t.full_name).where(_pat_t.id == P()).get_sql(), (data["patient_id"],)).fetchone()
     if pat:
         data["patient_name"] = pat[0]
     # Enrich: insurance payer name
-    ins = conn.execute("SELECT payer_name FROM healthclaw_patient_insurance WHERE id = ?", (data["insurance_id"],)).fetchone()
+    _ins_t = Table("healthclaw_patient_insurance")
+    ins = conn.execute(Q.from_(_ins_t).select(_ins_t.payer_name).where(_ins_t.id == P()).get_sql(), (data["insurance_id"],)).fetchone()
     if ins:
         data["payer_name"] = ins[0]
     # Enrich: line count
     data["line_count"] = conn.execute(Q.from_(Table("healthclaw_claim_line")).select(fn.Count("*")).where(Field("claim_id") == P()).get_sql(), (claim_id,)).fetchone()[0]
     # Enrich: payment posting total (Python Decimal summation — never CAST AS REAL)
+    _pp_t = Table("healthclaw_payment_posting")
     posting_rows = conn.execute(
-        "SELECT amount FROM healthclaw_payment_posting WHERE claim_id = ?",
+        Q.from_(_pp_t).select(_pp_t.amount).where(_pp_t.claim_id == P()).get_sql(),
         (claim_id,)
     ).fetchall()
     posting_total = sum((to_decimal(r[0]) for r in posting_rows), Decimal("0"))
@@ -639,10 +631,10 @@ def submit_claim(conn, args):
     if line_count == 0:
         err("Cannot submit claim with no claim lines. Add at least one claim line first.")
 
-    conn.execute(
-        "UPDATE healthclaw_claim SET claim_status = 'submitted', updated_at = datetime('now') WHERE id = ?",
-        (claim_id,)
-    )
+    sql = update_row("healthclaw_claim",
+        data={"claim_status": "submitted", "updated_at": LiteralValue("datetime('now')")},
+        where={"id": P()})
+    conn.execute(sql, (claim_id,))
     audit(conn, "healthclaw_claim", claim_id, "health-submit-claim", None)
     conn.commit()
     ok({"id": claim_id, "claim_status": "submitted", "line_count": line_count})

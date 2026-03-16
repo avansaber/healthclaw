@@ -15,7 +15,7 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, dynamic_update, update_row
 except ImportError:
     pass
 
@@ -59,13 +59,10 @@ def add_procedure_code(conn, args):
 
     pc_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute(
-        """INSERT INTO healthclaw_procedure_code
-           (id, company_id, code, code_type, description, category,
-            default_fee, is_active, notes, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)""",
+    sql, _ = insert_row("healthclaw_procedure_code", {"id": P(), "company_id": P(), "code": P(), "code_type": P(), "description": P(), "category": P(), "default_fee": P(), "is_active": P(), "notes": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql,
         (pc_id, args.company_id, args.code, code_type, args.description,
-         getattr(args, "category", None), default_fee,
+         getattr(args, "category", None), default_fee, 1,
          getattr(args, "notes", None), now, now)
     )
     audit(conn, "healthclaw_procedure_code", pc_id, "health-add-procedure-code", args.company_id)
@@ -77,25 +74,28 @@ def add_procedure_code(conn, args):
 # 2. list-procedure-codes
 # ---------------------------------------------------------------------------
 def list_procedure_codes(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_procedure_code")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "company_id", None):
-        where.append("company_id = ?"); params.append(args.company_id)
+        q_count = q_count.where(t.company_id == P()); q_rows = q_rows.where(t.company_id == P()); params.append(args.company_id)
     if getattr(args, "code_type", None):
-        where.append("code_type = ?"); params.append(args.code_type)
+        q_count = q_count.where(t.code_type == P()); q_rows = q_rows.where(t.code_type == P()); params.append(args.code_type)
     if getattr(args, "category", None):
-        where.append("category = ?"); params.append(args.category)
+        q_count = q_count.where(t.category == P()); q_rows = q_rows.where(t.category == P()); params.append(args.category)
     if getattr(args, "search", None):
-        where.append("(code LIKE ? OR description LIKE ?)")
         s = f"%{args.search}%"
+        crit = LiteralValue("(\"code\" LIKE ? OR \"description\" LIKE ?)")
+        q_count = q_count.where(crit); q_rows = q_rows.where(crit)
         params.extend([s, s])
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_procedure_code WHERE {where_sql}", params).fetchone()[0]
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
     limit = getattr(args, "limit", None) or 50
     offset = getattr(args, "offset", None) or 0
-    params.extend([limit, offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_procedure_code WHERE {where_sql} ORDER BY code ASC LIMIT ? OFFSET ?", params
-    ).fetchall()
+    q_rows = q_rows.orderby(t.code, order=Order.asc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [limit, offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": limit, "offset": offset, "has_more": (offset + limit) < total})
 
@@ -126,16 +126,13 @@ def add_charge(conn, args):
 
     charge_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute(
-        """INSERT INTO healthclaw_charge
-           (id, company_id, patient_id, provider_id, procedure_code_id,
-            service_date, cpt_code, icd10_codes, description, quantity,
-            unit_fee, total_fee, charge_status, notes, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unbilled', ?, ?, ?)""",
+    sql, _ = insert_row("healthclaw_charge", {"id": P(), "company_id": P(), "patient_id": P(), "provider_id": P(), "procedure_code_id": P(), "service_date": P(), "cpt_code": P(), "icd10_codes": P(), "description": P(), "quantity": P(), "unit_fee": P(), "total_fee": P(), "charge_status": P(), "notes": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql,
         (charge_id, args.company_id, args.patient_id, args.provider_id,
          procedure_code_id, args.service_date,
          getattr(args, "cpt_code", None), icd10_codes,
          getattr(args, "description", None), quantity, unit_fee, total_fee,
+         "unbilled",
          getattr(args, "notes", None), now, now)
     )
     audit(conn, "healthclaw_charge", charge_id, "health-add-charge", args.company_id)
@@ -147,26 +144,29 @@ def add_charge(conn, args):
 # 4. list-charges
 # ---------------------------------------------------------------------------
 def list_charges(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_charge")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "company_id", None):
-        where.append("company_id = ?"); params.append(args.company_id)
+        q_count = q_count.where(t.company_id == P()); q_rows = q_rows.where(t.company_id == P()); params.append(args.company_id)
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?"); params.append(args.patient_id)
+        q_count = q_count.where(t.patient_id == P()); q_rows = q_rows.where(t.patient_id == P()); params.append(args.patient_id)
     charge_status = getattr(args, "charge_status", None)
     if charge_status:
-        where.append("charge_status = ?"); params.append(charge_status)
+        q_count = q_count.where(t.charge_status == P()); q_rows = q_rows.where(t.charge_status == P()); params.append(charge_status)
     if getattr(args, "search", None):
-        where.append("(cpt_code LIKE ? OR description LIKE ? OR notes LIKE ?)")
         s = f"%{args.search}%"
+        crit = LiteralValue("(\"cpt_code\" LIKE ? OR \"description\" LIKE ? OR \"notes\" LIKE ?)")
+        q_count = q_count.where(crit); q_rows = q_rows.where(crit)
         params.extend([s, s, s])
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_charge WHERE {where_sql}", params).fetchone()[0]
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
     limit = getattr(args, "limit", None) or 50
     offset = getattr(args, "offset", None) or 0
-    params.extend([limit, offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_charge WHERE {where_sql} ORDER BY service_date DESC LIMIT ? OFFSET ?", params
-    ).fetchall()
+    q_rows = q_rows.orderby(t.service_date, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [limit, offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": limit, "offset": offset, "has_more": (offset + limit) < total})
 
@@ -215,14 +215,8 @@ def add_claim(conn, args):
 
     claim_id = str(uuid.uuid4())
     now = _now_iso()
-    conn.execute(
-        """INSERT INTO healthclaw_claim
-           (id, company_id, patient_id, payer_name, payer_id_number,
-            policy_number, group_number, claim_number, charge_ids,
-            total_charged, total_allowed, total_paid, total_adjustment,
-            patient_responsibility, claim_status, notes, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '0.00', '0.00', '0.00', '0.00',
-                   'draft', ?, ?, ?)""",
+    sql, _ = insert_row("healthclaw_claim", {"id": P(), "company_id": P(), "patient_id": P(), "payer_name": P(), "payer_id_number": P(), "policy_number": P(), "group_number": P(), "claim_number": P(), "charge_ids": P(), "total_charged": P(), "total_allowed": P(), "total_paid": P(), "total_adjustment": P(), "patient_responsibility": P(), "claim_status": P(), "notes": P(), "created_at": P(), "updated_at": P()})
+    conn.execute(sql,
         (claim_id, args.company_id, args.patient_id, args.payer_name,
          getattr(args, "payer_id_number", None),
          getattr(args, "policy_number", None),
@@ -230,6 +224,8 @@ def add_claim(conn, args):
          getattr(args, "claim_number", None),
          charge_ids,
          str(round_currency(total_charged)),
+         "0.00", "0.00", "0.00", "0.00",
+         "draft",
          getattr(args, "notes", None), now, now)
     )
     audit(conn, "healthclaw_claim", claim_id, "health-add-claim", args.company_id)
@@ -242,28 +238,31 @@ def add_claim(conn, args):
 # 7. list-claims
 # ---------------------------------------------------------------------------
 def list_claims(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_claim")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "company_id", None):
-        where.append("company_id = ?"); params.append(args.company_id)
+        q_count = q_count.where(t.company_id == P()); q_rows = q_rows.where(t.company_id == P()); params.append(args.company_id)
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?"); params.append(args.patient_id)
+        q_count = q_count.where(t.patient_id == P()); q_rows = q_rows.where(t.patient_id == P()); params.append(args.patient_id)
     claim_status = getattr(args, "claim_status", None)
     if claim_status:
-        where.append("claim_status = ?"); params.append(claim_status)
+        q_count = q_count.where(t.claim_status == P()); q_rows = q_rows.where(t.claim_status == P()); params.append(claim_status)
     if getattr(args, "payer_name", None):
-        where.append("payer_name = ?"); params.append(args.payer_name)
+        q_count = q_count.where(t.payer_name == P()); q_rows = q_rows.where(t.payer_name == P()); params.append(args.payer_name)
     if getattr(args, "search", None):
-        where.append("(payer_name LIKE ? OR claim_number LIKE ? OR notes LIKE ?)")
         s = f"%{args.search}%"
+        crit = LiteralValue("(\"payer_name\" LIKE ? OR \"claim_number\" LIKE ? OR \"notes\" LIKE ?)")
+        q_count = q_count.where(crit); q_rows = q_rows.where(crit)
         params.extend([s, s, s])
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_claim WHERE {where_sql}", params).fetchone()[0]
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
     limit = getattr(args, "limit", None) or 50
     offset = getattr(args, "offset", None) or 0
-    params.extend([limit, offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_claim WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?", params
-    ).fetchall()
+    q_rows = q_rows.orderby(t.created_at, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [limit, offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": limit, "offset": offset, "has_more": (offset + limit) < total})
 
@@ -305,10 +304,10 @@ def submit_claim(conn, args):
         err(f"Cannot submit claim with status: {claim['claim_status']}. Must be draft or appealed")
 
     now = _now_iso()
-    conn.execute(
-        "UPDATE healthclaw_claim SET claim_status = 'submitted', submitted_date = ?, updated_at = datetime('now') WHERE id = ?",
-        (now, claim_id)
-    )
+    sql = update_row("healthclaw_claim",
+        data={"claim_status": "submitted", "submitted_date": P(), "updated_at": LiteralValue("datetime('now')")},
+        where={"id": P()})
+    conn.execute(sql, (now, claim_id))
 
     # Update associated charges to billed
     charge_ids_raw = claim.get("charge_ids", "[]")
@@ -316,11 +315,11 @@ def submit_claim(conn, args):
         charge_ids = json.loads(charge_ids_raw) if isinstance(charge_ids_raw, str) else charge_ids_raw
     except (json.JSONDecodeError, TypeError):
         charge_ids = []
+    _chg_sql = update_row("healthclaw_charge",
+        data={"charge_status": "billed", "updated_at": LiteralValue("datetime('now')")},
+        where={"id": P()})
     for cid in charge_ids:
-        conn.execute(
-            "UPDATE healthclaw_charge SET charge_status = 'billed', updated_at = datetime('now') WHERE id = ?",
-            (cid,)
-        )
+        conn.execute(_chg_sql, (cid,))
 
     audit(conn, "healthclaw_claim", claim_id, "health-submit-claim", claim["company_id"])
     conn.commit()
@@ -365,7 +364,7 @@ def add_payment_posting(conn, args):
          getattr(args, "notes", None), now)
     )
 
-    # Update claim totals
+    # PyPika: skipped — complex CAST arithmetic expression for claim totals
     conn.execute(
         """UPDATE healthclaw_claim SET
            total_allowed = CAST((CAST(total_allowed AS REAL) + CAST(? AS REAL)) AS TEXT),
@@ -386,23 +385,25 @@ def add_payment_posting(conn, args):
 # 11. list-payment-postings
 # ---------------------------------------------------------------------------
 def list_payment_postings(conn, args):
-    where, params = ["1=1"], []
+    t = Table("healthclaw_payment_posting")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
     if getattr(args, "company_id", None):
-        where.append("company_id = ?"); params.append(args.company_id)
+        q_count = q_count.where(t.company_id == P()); q_rows = q_rows.where(t.company_id == P()); params.append(args.company_id)
     if getattr(args, "claim_id", None):
-        where.append("claim_id = ?"); params.append(args.claim_id)
+        q_count = q_count.where(t.claim_id == P()); q_rows = q_rows.where(t.claim_id == P()); params.append(args.claim_id)
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?"); params.append(args.patient_id)
+        q_count = q_count.where(t.patient_id == P()); q_rows = q_rows.where(t.patient_id == P()); params.append(args.patient_id)
     if getattr(args, "payer_name", None):
-        where.append("payer_name = ?"); params.append(args.payer_name)
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_payment_posting WHERE {where_sql}", params).fetchone()[0]
+        q_count = q_count.where(t.payer_name == P()); q_rows = q_rows.where(t.payer_name == P()); params.append(args.payer_name)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
     limit = getattr(args, "limit", None) or 50
     offset = getattr(args, "offset", None) or 0
-    params.extend([limit, offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_payment_posting WHERE {where_sql} ORDER BY posting_date DESC LIMIT ? OFFSET ?", params
-    ).fetchall()
+    q_rows = q_rows.orderby(t.posting_date, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [limit, offset]).fetchall()
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
         "limit": limit, "offset": offset, "has_more": (offset + limit) < total})
 
@@ -417,6 +418,7 @@ def aging_report(conn, args):
         where.append("company_id = ?"); params.append(company_id)
     where_sql = " AND ".join(where)
 
+    # PyPika: skipped — complex julianday() calculation
     rows = conn.execute(
         f"""SELECT *,
             CAST(julianday('now') - julianday(service_date) AS INTEGER) as days_outstanding

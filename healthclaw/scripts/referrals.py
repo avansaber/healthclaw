@@ -17,7 +17,7 @@ try:
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, dynamic_update
 
     # Register HealthClaw naming prefixes (referrals domain)
     ENTITY_PREFIXES.setdefault("healthclaw_referral", "REF-")
@@ -141,7 +141,7 @@ def update_referral(conn, args):
     if not conn.execute(Q.from_(Table("healthclaw_referral")).select(Field("id")).where(Field("id") == P()).get_sql(), (ref_id,)).fetchone():
         err(f"Referral {ref_id} not found")
 
-    updates, params, changed = [], [], []
+    data, changed = {}, []
     for arg_name, col_name in {
         "referred_to_provider": "referred_to_provider",
         "referred_to_specialty": "referred_to_specialty",
@@ -155,22 +155,19 @@ def update_referral(conn, args):
     }.items():
         val = getattr(args, arg_name, None)
         if val is not None:
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
 
     priority = getattr(args, "priority", None)
     if priority is not None:
         _validate_enum(priority, VALID_REFERRAL_PRIORITIES, "priority")
-        updates.append("priority = ?")
-        params.append(priority)
+        data["priority"] = priority
         changed.append("priority")
 
     referral_status = getattr(args, "referral_status", None)
     if referral_status is not None:
         _validate_enum(referral_status, VALID_REFERRAL_STATUSES, "status")
-        updates.append("status = ?")
-        params.append(referral_status)
+        data["status"] = referral_status
         changed.append("status")
 
     # Optional FK updates
@@ -178,37 +175,33 @@ def update_referral(conn, args):
     if diagnosis_id is not None:
         if not conn.execute(Q.from_(Table("healthclaw_diagnosis")).select(Field("id")).where(Field("id") == P()).get_sql(), (diagnosis_id,)).fetchone():
             err(f"Diagnosis {diagnosis_id} not found")
-        updates.append("diagnosis_id = ?")
-        params.append(diagnosis_id)
+        data["diagnosis_id"] = diagnosis_id
         changed.append("diagnosis_id")
 
     insurance_id = getattr(args, "insurance_id", None)
     if insurance_id is not None:
         if not conn.execute(Q.from_(Table("healthclaw_patient_insurance")).select(Field("id")).where(Field("id") == P()).get_sql(), (insurance_id,)).fetchone():
             err(f"Insurance {insurance_id} not found")
-        updates.append("insurance_id = ?")
-        params.append(insurance_id)
+        data["insurance_id"] = insurance_id
         changed.append("insurance_id")
 
     prior_auth_id = getattr(args, "prior_auth_id", None)
     if prior_auth_id is not None:
         if not conn.execute(Q.from_(Table("healthclaw_prior_auth")).select(Field("id")).where(Field("id") == P()).get_sql(), (prior_auth_id,)).fetchone():
             err(f"Prior auth {prior_auth_id} not found")
-        updates.append("prior_auth_id = ?")
-        params.append(prior_auth_id)
+        data["prior_auth_id"] = prior_auth_id
         changed.append("prior_auth_id")
 
     if getattr(args, "prior_auth_required", None) is not None:
-        updates.append("prior_auth_required = ?")
-        params.append(1 if args.prior_auth_required == "1" else 0)
+        data["prior_auth_required"] = 1 if args.prior_auth_required == "1" else 0
         changed.append("prior_auth_required")
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(ref_id)
-    conn.execute(f"UPDATE healthclaw_referral SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("healthclaw_referral", data, {"id": ref_id})
+    conn.execute(sql, params)
     audit(conn, "healthclaw_referral", ref_id, "health-update-referral", None, {"updated_fields": changed})
     conn.commit()
     ok({"id": ref_id, "updated_fields": changed})
@@ -227,17 +220,20 @@ def get_referral(conn, args):
     data = row_to_dict(row)
 
     # Enrich: patient name
-    pat = conn.execute("SELECT full_name FROM healthclaw_patient WHERE id = ?", (data["patient_id"],)).fetchone()
+    _pat_t = Table("healthclaw_patient")
+    pat = conn.execute(Q.from_(_pat_t).select(_pat_t.full_name).where(_pat_t.id == P()).get_sql(), (data["patient_id"],)).fetchone()
     if pat:
         data["patient_name"] = pat[0]
     # Enrich: referring provider name
-    prov = conn.execute("SELECT full_name FROM employee WHERE id = ?", (data["referring_provider_id"],)).fetchone()
+    _emp_t = Table("employee")
+    prov = conn.execute(Q.from_(_emp_t).select(_emp_t.full_name).where(_emp_t.id == P()).get_sql(), (data["referring_provider_id"],)).fetchone()
     if prov:
         data["referring_provider_name"] = prov[0]
     # Enrich: prior auth info if linked
     if data.get("prior_auth_id"):
+        _auth_t = Table("healthclaw_prior_auth")
         auth = conn.execute(
-            "SELECT status, auth_number FROM healthclaw_prior_auth WHERE id = ?",
+            Q.from_(_auth_t).select(_auth_t.status, _auth_t.auth_number).where(_auth_t.id == P()).get_sql(),
             (data["prior_auth_id"],)
         ).fetchone()
         if auth:
@@ -375,7 +371,7 @@ def update_prior_auth(conn, args):
     if not conn.execute(Q.from_(Table("healthclaw_prior_auth")).select(Field("id")).where(Field("id") == P()).get_sql(), (auth_id,)).fetchone():
         err(f"Prior auth {auth_id} not found")
 
-    updates, params, changed = [], [], []
+    data, changed = {}, []
     for arg_name, col_name in {
         "auth_number": "auth_number",
         "cpt_codes": "cpt_codes",
@@ -390,42 +386,37 @@ def update_prior_auth(conn, args):
     }.items():
         val = getattr(args, arg_name, None)
         if val is not None:
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
 
     service_type = getattr(args, "service_type", None)
     if service_type is not None:
         _validate_enum(service_type, VALID_AUTH_SERVICE_TYPES, "health-service-type")
-        updates.append("service_type = ?")
-        params.append(service_type)
+        data["service_type"] = service_type
         changed.append("service_type")
 
     auth_status = getattr(args, "auth_status", None)
     if auth_status is not None:
         _validate_enum(auth_status, VALID_AUTH_STATUSES, "status")
-        updates.append("status = ?")
-        params.append(auth_status)
+        data["status"] = auth_status
         changed.append("status")
 
     units_requested = getattr(args, "units_requested", None)
     if units_requested is not None:
-        updates.append("units_requested = ?")
-        params.append(int(units_requested))
+        data["units_requested"] = int(units_requested)
         changed.append("units_requested")
 
     units_approved = getattr(args, "units_approved", None)
     if units_approved is not None:
-        updates.append("units_approved = ?")
-        params.append(int(units_approved))
+        data["units_approved"] = int(units_approved)
         changed.append("units_approved")
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(auth_id)
-    conn.execute(f"UPDATE healthclaw_prior_auth SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("healthclaw_prior_auth", data, {"id": auth_id})
+    conn.execute(sql, params)
     audit(conn, "healthclaw_prior_auth", auth_id, "health-update-prior-auth", None, {"updated_fields": changed})
     conn.commit()
     ok({"id": auth_id, "updated_fields": changed})
@@ -444,20 +435,24 @@ def get_prior_auth(conn, args):
     data = row_to_dict(row)
 
     # Enrich: patient name
-    pat = conn.execute("SELECT full_name FROM healthclaw_patient WHERE id = ?", (data["patient_id"],)).fetchone()
+    _pat_t = Table("healthclaw_patient")
+    pat = conn.execute(Q.from_(_pat_t).select(_pat_t.full_name).where(_pat_t.id == P()).get_sql(), (data["patient_id"],)).fetchone()
     if pat:
         data["patient_name"] = pat[0]
     # Enrich: insurance payer name
-    ins = conn.execute("SELECT payer_name FROM healthclaw_patient_insurance WHERE id = ?", (data["insurance_id"],)).fetchone()
+    _ins_t = Table("healthclaw_patient_insurance")
+    ins = conn.execute(Q.from_(_ins_t).select(_ins_t.payer_name).where(_ins_t.id == P()).get_sql(), (data["insurance_id"],)).fetchone()
     if ins:
         data["payer_name"] = ins[0]
     # Enrich: requesting provider name
-    prov = conn.execute("SELECT full_name FROM employee WHERE id = ?", (data["requesting_provider_id"],)).fetchone()
+    _emp_t = Table("employee")
+    prov = conn.execute(Q.from_(_emp_t).select(_emp_t.full_name).where(_emp_t.id == P()).get_sql(), (data["requesting_provider_id"],)).fetchone()
     if prov:
         data["requesting_provider_name"] = prov[0]
     # Enrich: usage count
+    _au_t = Table("healthclaw_auth_usage")
     usage = conn.execute(
-        "SELECT COUNT(*), COALESCE(SUM(units_used), 0) FROM healthclaw_auth_usage WHERE prior_auth_id = ?",
+        Q.from_(_au_t).select(fn.Count("*"), fn.Coalesce(fn.Sum(_au_t.units_used), 0)).where(_au_t.prior_auth_id == P()).get_sql(),
         (auth_id,)
     ).fetchone()
     data["usage_count"] = usage[0]

@@ -19,7 +19,7 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.crypto import encrypt_field as _enc_raw, decrypt_field as _dec_raw, derive_key
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, dynamic_update
 
     # Register HealthClaw naming prefixes (patients domain)
     ENTITY_PREFIXES.setdefault("healthclaw_patient", "PAT-")
@@ -195,12 +195,14 @@ def get_patient(conn, args):
     _mask_ssn_in_row(data)
 
     # Enrich with counts
+    _ins = Table("healthclaw_patient_insurance")
     ins_count = conn.execute(
-        "SELECT COUNT(*) FROM healthclaw_patient_insurance WHERE patient_id = ? AND status = 'active'",
+        Q.from_(_ins).select(fn.Count("*")).where(_ins.patient_id == P()).where(_ins.status == "active").get_sql(),
         (args.patient_id,)
     ).fetchone()[0]
+    _alg = Table("healthclaw_allergy")
     allergy_count = conn.execute(
-        "SELECT COUNT(*) FROM healthclaw_allergy WHERE patient_id = ? AND status = 'active'",
+        Q.from_(_alg).select(fn.Count("*")).where(_alg.patient_id == P()).where(_alg.status == "active").get_sql(),
         (args.patient_id,)
     ).fetchone()[0]
     data["active_insurance_count"] = ins_count
@@ -214,16 +216,15 @@ def get_patient(conn, args):
 def update_patient(conn, args):
     _validate_patient(conn, args.patient_id)
 
-    updates = []
-    params = []
+    data = {}
     changed = []
 
     # Handle SSN separately (needs encryption)
     raw_ssn = getattr(args, "ssn", None)
     if raw_ssn is not None:
         encrypted_ssn, ssn_last4 = _encrypt_ssn(raw_ssn)
-        updates.append("ssn = ?"); params.append(encrypted_ssn); changed.append("ssn")
-        updates.append("ssn_last4 = ?"); params.append(ssn_last4); changed.append("ssn_last4")
+        data["ssn"] = encrypted_ssn; changed.append("ssn")
+        data["ssn_last4"] = ssn_last4; changed.append("ssn_last4")
 
     field_map = {
         "first_name": "first_name", "last_name": "last_name",
@@ -259,25 +260,23 @@ def update_patient(conn, args):
                 row = conn.execute(Q.from_(Table("customer")).select(Field("id")).where(Field("id") == P()).get_sql(), (val,)).fetchone()
                 if not row:
                     err(f"Customer {val} not found")
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
     # Recompute full_name if first/last changed
     if "first_name" in changed or "last_name" in changed:
         row = conn.execute(Q.from_(Table("healthclaw_patient")).select(Field("first_name"), Field("last_name")).where(Field("id") == P()).get_sql(), (args.patient_id,)).fetchone()
-        fn = getattr(args, "first_name", None) or row[0]
-        ln = getattr(args, "last_name", None) or row[1]
-        updates.append("full_name = ?")
-        params.append(f"{fn} {ln}")
+        _fn = getattr(args, "first_name", None) or row[0]
+        _ln = getattr(args, "last_name", None) or row[1]
+        data["full_name"] = f"{_fn} {_ln}"
 
-    updates.append("updated_at = datetime('now')")
-    params.append(args.patient_id)
+    data["updated_at"] = LiteralValue("datetime('now')")
 
-    conn.execute(f"UPDATE healthclaw_patient SET {', '.join(updates)} WHERE id = ?", params)
+    sql, params = dynamic_update("healthclaw_patient", data, {"id": args.patient_id})
+    conn.execute(sql, params)
     audit(conn, "healthclaw_patient", args.patient_id, "health-update-patient", None, {"updated_fields": changed})
     conn.commit()
     ok({"id": args.patient_id, "updated_fields": changed})
@@ -287,31 +286,34 @@ def update_patient(conn, args):
 # 4. list-patients
 # ---------------------------------------------------------------------------
 def list_patients(conn, args):
-    where = ["1=1"]
+    t = Table("healthclaw_patient")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
     params = []
 
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+        q_count = q_count.where(t.company_id == P())
+        q_rows = q_rows.where(t.company_id == P())
         params.append(args.company_id)
     if getattr(args, "status", None):
-        where.append("status = ?")
+        q_count = q_count.where(t.status == P())
+        q_rows = q_rows.where(t.status == P())
         params.append(args.status)
     if getattr(args, "primary_provider_id", None):
-        where.append("primary_provider_id = ?")
+        q_count = q_count.where(t.primary_provider_id == P())
+        q_rows = q_rows.where(t.primary_provider_id == P())
         params.append(args.primary_provider_id)
     if getattr(args, "search", None):
-        where.append("(full_name LIKE ? OR mrn LIKE ? OR email LIKE ?)")
         s = f"%{args.search}%"
+        crit = LiteralValue(f"(\"full_name\" LIKE ? OR \"mrn\" LIKE ? OR \"email\" LIKE ?)")
+        q_count = q_count.where(crit)
+        q_rows = q_rows.where(crit)
         params.extend([s, s, s])
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_patient WHERE {where_sql}", params).fetchone()[0]
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
 
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_patient WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+    q_rows = q_rows.orderby(t.created_at, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [_mask_ssn_in_row(row_to_dict(r)) for r in rows],
         "total_count": total,
@@ -381,8 +383,7 @@ def update_patient_insurance(conn, args):
     if not row:
         err(f"Insurance {ins_id} not found")
 
-    updates = []
-    params = []
+    data = {}
     changed = []
     field_map = {
         "insurance_type": "insurance_type", "payer_name": "payer_name",
@@ -406,28 +407,25 @@ def update_patient_insurance(conn, args):
                 _validate_enum(val, VALID_SUBSCRIBER_RELATIONSHIPS, "health-subscriber-relationship")
             elif col_name == "status":
                 _validate_enum(val, VALID_INSURANCE_STATUSES, "status")
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
 
     for mf in money_fields:
         val = getattr(args, mf, None)
         if val is not None:
-            updates.append(f"{mf} = ?")
-            params.append(str(round_currency(to_decimal(val))))
+            data[mf] = str(round_currency(to_decimal(val)))
             changed.append(mf)
 
     if getattr(args, "preauth_required", None) is not None:
-        updates.append("preauth_required = ?")
-        params.append(1 if args.preauth_required == "1" else 0)
+        data["preauth_required"] = 1 if args.preauth_required == "1" else 0
         changed.append("preauth_required")
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(ins_id)
-    conn.execute(f"UPDATE healthclaw_patient_insurance SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("healthclaw_patient_insurance", data, {"id": ins_id})
+    conn.execute(sql, params)
     audit(conn, "healthclaw_patient_insurance", ins_id, "health-update-patient-insurance", None, {"updated_fields": changed})
     conn.commit()
     ok({"id": ins_id, "updated_fields": changed})
@@ -437,28 +435,31 @@ def update_patient_insurance(conn, args):
 # 7. list-patient-insurances
 # ---------------------------------------------------------------------------
 def list_patient_insurances(conn, args):
-    where = ["1=1"]
+    t = Table("healthclaw_patient_insurance")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
     params = []
+
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?")
+        q_count = q_count.where(t.patient_id == P())
+        q_rows = q_rows.where(t.patient_id == P())
         params.append(args.patient_id)
     if getattr(args, "company_id", None):
-        where.append("company_id = ?")
+        q_count = q_count.where(t.company_id == P())
+        q_rows = q_rows.where(t.company_id == P())
         params.append(args.company_id)
     if getattr(args, "status", None):
-        where.append("status = ?")
+        q_count = q_count.where(t.status == P())
+        q_rows = q_rows.where(t.status == P())
         params.append(args.status)
     if getattr(args, "insurance_type", None):
-        where.append("insurance_type = ?")
+        q_count = q_count.where(t.insurance_type == P())
+        q_rows = q_rows.where(t.insurance_type == P())
         params.append(args.insurance_type)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_patient_insurance WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_patient_insurance WHERE {where_sql} ORDER BY insurance_type ASC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.insurance_type, order=Order.asc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -510,8 +511,7 @@ def update_allergy(conn, args):
     if not row:
         err(f"Allergy {allergy_id} not found")
 
-    updates = []
-    params = []
+    data = {}
     changed = []
     for arg_name, col_name in {
         "allergen": "allergen", "allergen_type": "allergen_type",
@@ -526,16 +526,15 @@ def update_allergy(conn, args):
                 _validate_enum(val, VALID_SEVERITIES, "severity")
             elif col_name == "status":
                 _validate_enum(val, VALID_ALLERGY_STATUSES, "status")
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(allergy_id)
-    conn.execute(f"UPDATE healthclaw_allergy SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("healthclaw_allergy", data, {"id": allergy_id})
+    conn.execute(sql, params)
     audit(conn, "healthclaw_allergy", allergy_id, "health-update-allergy", None, {"updated_fields": changed})
     conn.commit()
     ok({"id": allergy_id, "updated_fields": changed})
@@ -545,25 +544,27 @@ def update_allergy(conn, args):
 # 10. list-allergies
 # ---------------------------------------------------------------------------
 def list_allergies(conn, args):
-    where = ["1=1"]
+    t = Table("healthclaw_allergy")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
     params = []
+
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?")
+        q_count = q_count.where(t.patient_id == P())
+        q_rows = q_rows.where(t.patient_id == P())
         params.append(args.patient_id)
     if getattr(args, "status", None):
-        where.append("status = ?")
+        q_count = q_count.where(t.status == P())
+        q_rows = q_rows.where(t.status == P())
         params.append(args.status)
     if getattr(args, "allergen_type", None):
-        where.append("allergen_type = ?")
+        q_count = q_count.where(t.allergen_type == P())
+        q_rows = q_rows.where(t.allergen_type == P())
         params.append(args.allergen_type)
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_allergy WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_allergy WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.created_at, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -608,8 +609,7 @@ def update_medical_history(conn, args):
     if not row:
         err(f"Medical history {mh_id} not found")
 
-    updates = []
-    params = []
+    data = {}
     changed = []
     for arg_name, col_name in {
         "condition": "condition", "icd10_code": "icd10_code",
@@ -620,16 +620,15 @@ def update_medical_history(conn, args):
         if val is not None:
             if col_name == "status":
                 _validate_enum(val, VALID_MEDHIST_STATUSES, "status")
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(mh_id)
-    conn.execute(f"UPDATE healthclaw_medical_history SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("healthclaw_medical_history", data, {"id": mh_id})
+    conn.execute(sql, params)
     audit(conn, "healthclaw_medical_history", mh_id, "health-update-medical-history", None, {"updated_fields": changed})
     conn.commit()
     ok({"id": mh_id, "updated_fields": changed})
@@ -639,26 +638,29 @@ def update_medical_history(conn, args):
 # 13. list-medical-history
 # ---------------------------------------------------------------------------
 def list_medical_history(conn, args):
-    where = ["1=1"]
+    t = Table("healthclaw_medical_history")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
     params = []
+
     if getattr(args, "patient_id", None):
-        where.append("patient_id = ?")
+        q_count = q_count.where(t.patient_id == P())
+        q_rows = q_rows.where(t.patient_id == P())
         params.append(args.patient_id)
     if getattr(args, "medhist_status", None):
-        where.append("status = ?")
+        q_count = q_count.where(t.status == P())
+        q_rows = q_rows.where(t.status == P())
         params.append(args.medhist_status)
     if getattr(args, "search", None):
-        where.append("(condition LIKE ? OR icd10_code LIKE ?)")
         s = f"%{args.search}%"
+        crit = LiteralValue(f"(\"condition\" LIKE ? OR \"icd10_code\" LIKE ?)")
+        q_count = q_count.where(crit)
+        q_rows = q_rows.where(crit)
         params.extend([s, s])
 
-    where_sql = " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM healthclaw_medical_history WHERE {where_sql}", params).fetchone()[0]
-    params.extend([args.limit, args.offset])
-    rows = conn.execute(
-        f"SELECT * FROM healthclaw_medical_history WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
-        params
-    ).fetchall()
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.created_at, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
     ok({
         "rows": [row_to_dict(r) for r in rows],
         "total_count": total, "limit": args.limit, "offset": args.offset,
@@ -706,8 +708,7 @@ def update_patient_contact(conn, args):
     if not row:
         err(f"Contact {contact_id} not found")
 
-    updates = []
-    params = []
+    data = {}
     changed = []
     for arg_name, col_name in {
         "contact_type": "contact_type", "contact_name": "name",
@@ -718,21 +719,19 @@ def update_patient_contact(conn, args):
         if val is not None:
             if col_name == "contact_type":
                 _validate_enum(val, VALID_CONTACT_TYPES, "health-contact-type")
-            updates.append(f"{col_name} = ?")
-            params.append(val)
+            data[col_name] = val
             changed.append(col_name)
 
     if getattr(args, "is_primary", None) is not None:
-        updates.append("is_primary = ?")
-        params.append(1 if args.is_primary == "1" else 0)
+        data["is_primary"] = 1 if args.is_primary == "1" else 0
         changed.append("is_primary")
 
-    if not updates:
+    if not data:
         err("No fields to update")
 
-    updates.append("updated_at = datetime('now')")
-    params.append(contact_id)
-    conn.execute(f"UPDATE healthclaw_patient_contact SET {', '.join(updates)} WHERE id = ?", params)
+    data["updated_at"] = LiteralValue("datetime('now')")
+    sql, params = dynamic_update("healthclaw_patient_contact", data, {"id": contact_id})
+    conn.execute(sql, params)
     audit(conn, "healthclaw_patient_contact", contact_id, "health-update-patient-contact", None, {"updated_fields": changed})
     conn.commit()
     ok({"id": contact_id, "updated_fields": changed})

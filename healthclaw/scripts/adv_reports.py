@@ -42,6 +42,7 @@ def revenue_cycle_report(conn, args):
         charge_where.append("service_date <= ?"); charge_params.append(date_to)
     charge_sql = " AND ".join(charge_where)
 
+    # PyPika: skipped — complex GROUP BY with CAST aggregate
     charge_rows = conn.execute(
         f"SELECT charge_status, COUNT(*) as cnt, COALESCE(SUM(CAST(total_fee AS REAL)), 0) as total FROM healthclaw_charge WHERE {charge_sql} GROUP BY charge_status",
         charge_params
@@ -65,6 +66,7 @@ def revenue_cycle_report(conn, args):
         claim_where.append("company_id = ?"); claim_params.append(company_id)
     claim_sql = " AND ".join(claim_where)
 
+    # PyPika: skipped — complex GROUP BY with CAST aggregate
     claim_rows = conn.execute(
         f"SELECT claim_status, COUNT(*) as cnt, COALESCE(SUM(CAST(total_charged AS REAL)), 0) as charged, COALESCE(SUM(CAST(total_paid AS REAL)), 0) as paid FROM healthclaw_claim WHERE {claim_sql} GROUP BY claim_status",
         claim_params
@@ -107,6 +109,7 @@ def payer_mix_report(conn, args):
         where.append("company_id = ?"); params.append(company_id)
     where_sql = " AND ".join(where)
 
+    # PyPika: skipped — complex GROUP BY with multiple CAST aggregates
     rows = conn.execute(
         f"""SELECT payer_name,
             COUNT(*) as claim_count,
@@ -155,6 +158,7 @@ def denial_rate_report(conn, args):
         where.append("company_id = ?"); params.append(company_id)
     where_sql = " AND ".join(where)
 
+    # PyPika: skipped — denial rate report uses complex grouped queries
     # Total claims
     total_row = conn.execute(
         f"SELECT COUNT(*) as total FROM healthclaw_claim WHERE {where_sql}", params
