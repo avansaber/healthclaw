@@ -19,7 +19,7 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.crypto import encrypt_field as _enc_raw, decrypt_field as _dec_raw, derive_key
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, dynamic_update
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, dynamic_update, now
 
     # Register HealthClaw naming prefixes (patients domain)
     ENTITY_PREFIXES.setdefault("healthclaw_patient", "PAT-")
@@ -155,7 +155,7 @@ def add_patient(conn, args):
     if raw_ssn:
         encrypted_ssn, ssn_last4 = _encrypt_ssn(raw_ssn)
 
-    now = _now_iso()
+    _ts = _now_iso()
     sql, _ = insert_row("healthclaw_patient", {"id": P(), "naming_series": P(), "customer_id": P(), "first_name": P(), "last_name": P(), "full_name": P(), "date_of_birth": P(), "gender": P(), "ssn": P(), "ssn_last4": P(), "mrn": P(), "marital_status": P(), "race": P(), "ethnicity": P(), "preferred_language": P(), "primary_phone": P(), "secondary_phone": P(), "email": P(), "address_line1": P(), "address_line2": P(), "city": P(), "state": P(), "zip_code": P(), "primary_provider_id": P(), "status": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
 
     conn.execute(sql, (
@@ -178,7 +178,7 @@ def add_patient(conn, args):
         provider_id,
         "active",
         getattr(args, "notes", None),
-        args.company_id, now, now,
+        args.company_id, _ts, _ts,
     ))
     audit(conn, "healthclaw_patient", patient_id, "health-add-patient", args.company_id)
     conn.commit()
@@ -273,7 +273,7 @@ def update_patient(conn, args):
         _ln = getattr(args, "last_name", None) or row[1]
         data["full_name"] = f"{_fn} {_ln}"
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = now()
 
     sql, params = dynamic_update("healthclaw_patient", data, {"id": args.patient_id})
     conn.execute(sql, params)
@@ -305,7 +305,7 @@ def list_patients(conn, args):
         params.append(args.primary_provider_id)
     if getattr(args, "search", None):
         s = f"%{args.search}%"
-        crit = LiteralValue(f"(\"full_name\" LIKE ? OR \"mrn\" LIKE ? OR \"email\" LIKE ?)")
+        crit = LiteralValue(f"(LOWER(\"full_name\") LIKE LOWER(?) OR LOWER(\"mrn\") LIKE LOWER(?) OR LOWER(\"email\") LIKE LOWER(?))")
         q_count = q_count.where(crit)
         q_rows = q_rows.where(crit)
         params.extend([s, s, s])
@@ -346,7 +346,7 @@ def add_patient_insurance(conn, args):
 
     ins_id = str(uuid.uuid4())
     naming = get_next_name(conn, "healthclaw_patient_insurance", company_id=args.company_id)
-    now = _now_iso()
+    _ts = _now_iso()
 
     sql, _ = insert_row("healthclaw_patient_insurance", {"id": P(), "naming_series": P(), "patient_id": P(), "insurance_type": P(), "payer_name": P(), "payer_id": P(), "plan_name": P(), "plan_type": P(), "group_number": P(), "member_id": P(), "subscriber_name": P(), "subscriber_dob": P(), "subscriber_relationship": P(), "copay_amount": P(), "deductible": P(), "deductible_met": P(), "out_of_pocket_max": P(), "effective_date": P(), "termination_date": P(), "preauth_required": P(), "status": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
 
@@ -365,7 +365,7 @@ def add_patient_insurance(conn, args):
         args.effective_date,
         getattr(args, "termination_date", None),
         1 if getattr(args, "preauth_required", None) == "1" else 0,
-        "active", args.company_id, now, now,
+        "active", args.company_id, _ts, _ts,
     ))
     audit(conn, "healthclaw_patient_insurance", ins_id, "health-add-patient-insurance", args.company_id)
     conn.commit()
@@ -423,7 +423,7 @@ def update_patient_insurance(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = now()
     sql, params = dynamic_update("healthclaw_patient_insurance", data, {"id": ins_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_patient_insurance", ins_id, "health-update-patient-insurance", None, {"updated_fields": changed})
@@ -486,14 +486,14 @@ def add_allergy(conn, args):
             err(f"Employee {noted_by} not found")
 
     allergy_id = str(uuid.uuid4())
-    now = _now_iso()
+    _ts = _now_iso()
     sql, _ = insert_row("healthclaw_allergy", {"id": P(), "patient_id": P(), "allergen": P(), "allergen_type": P(), "reaction": P(), "severity": P(), "onset_date": P(), "status": P(), "noted_by_id": P(), "notes": P(), "created_at": P(), "updated_at": P()})
 
     conn.execute(sql, (
         allergy_id, args.patient_id, args.allergen, allergen_type,
         getattr(args, "reaction", None), severity,
         getattr(args, "onset_date", None), "active",
-        noted_by, getattr(args, "notes", None), now, now,
+        noted_by, getattr(args, "notes", None), _ts, _ts,
     ))
     audit(conn, "healthclaw_allergy", allergy_id, "health-add-allergy", None)
     conn.commit()
@@ -532,7 +532,7 @@ def update_allergy(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = now()
     sql, params = dynamic_update("healthclaw_allergy", data, {"id": allergy_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_allergy", allergy_id, "health-update-allergy", None, {"updated_fields": changed})
@@ -582,7 +582,7 @@ def add_medical_history(conn, args):
         err("--condition is required")
 
     medhist_id = str(uuid.uuid4())
-    now = _now_iso()
+    _ts = _now_iso()
     sql, _ = insert_row("healthclaw_medical_history", {"id": P(), "patient_id": P(), "condition": P(), "icd10_code": P(), "diagnosis_date": P(), "resolution_date": P(), "status": P(), "notes": P(), "created_at": P(), "updated_at": P()})
 
     conn.execute(sql, (
@@ -591,7 +591,7 @@ def add_medical_history(conn, args):
         getattr(args, "diagnosis_date", None),
         getattr(args, "resolution_date", None),
         getattr(args, "medhist_status", None) or "active",
-        getattr(args, "notes", None), now, now,
+        getattr(args, "notes", None), _ts, _ts,
     ))
     audit(conn, "healthclaw_medical_history", medhist_id, "health-add-medical-history", None)
     conn.commit()
@@ -626,7 +626,7 @@ def update_medical_history(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = now()
     sql, params = dynamic_update("healthclaw_medical_history", data, {"id": mh_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_medical_history", mh_id, "health-update-medical-history", None, {"updated_fields": changed})
@@ -653,7 +653,7 @@ def list_medical_history(conn, args):
         params.append(args.medhist_status)
     if getattr(args, "search", None):
         s = f"%{args.search}%"
-        crit = LiteralValue(f"(\"condition\" LIKE ? OR \"icd10_code\" LIKE ?)")
+        crit = LiteralValue(f"(LOWER(\"condition\") LIKE LOWER(?) OR LOWER(\"icd10_code\") LIKE LOWER(?))")
         q_count = q_count.where(crit)
         q_rows = q_rows.where(crit)
         params.extend([s, s])
@@ -680,7 +680,7 @@ def add_patient_contact(conn, args):
     _validate_enum(contact_type, VALID_CONTACT_TYPES, "health-contact-type")
 
     contact_id = str(uuid.uuid4())
-    now = _now_iso()
+    _ts = _now_iso()
     sql, _ = insert_row("healthclaw_patient_contact", {"id": P(), "patient_id": P(), "contact_type": P(), "name": P(), "relationship": P(), "phone": P(), "email": P(), "address": P(), "is_primary": P(), "created_at": P(), "updated_at": P()})
 
     conn.execute(sql, (
@@ -690,7 +690,7 @@ def add_patient_contact(conn, args):
         getattr(args, "contact_email", None),
         getattr(args, "contact_address", None),
         1 if getattr(args, "is_primary", None) == "1" else 0,
-        now, now,
+        _ts, _ts,
     ))
     audit(conn, "healthclaw_patient_contact", contact_id, "health-add-patient-contact", None)
     conn.commit()
@@ -729,7 +729,7 @@ def update_patient_contact(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = now()
     sql, params = dynamic_update("healthclaw_patient_contact", data, {"id": contact_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_patient_contact", contact_id, "health-update-patient-contact", None, {"updated_fields": changed})
@@ -760,7 +760,7 @@ def add_consent(conn, args):
             err(f"Employee {obtained_by} not found")
 
     consent_id = str(uuid.uuid4())
-    now = _now_iso()
+    _ts = _now_iso()
     sql, _ = insert_row("healthclaw_consent", {"id": P(), "patient_id": P(), "consent_type": P(), "description": P(), "granted_date": P(), "expiration_date": P(), "revoked_date": P(), "status": P(), "witness_name": P(), "obtained_by_id": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
 
     conn.execute(sql, (
@@ -771,7 +771,7 @@ def add_consent(conn, args):
         getattr(args, "witness_name", None),
         obtained_by,
         getattr(args, "notes", None),
-        args.company_id, now, now,
+        args.company_id, _ts, _ts,
     ))
     audit(conn, "healthclaw_consent", consent_id, "health-add-consent", args.company_id)
     conn.commit()

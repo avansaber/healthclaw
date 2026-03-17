@@ -13,9 +13,8 @@ DB_PATH = os.environ.get("ERPCLAW_DB_PATH", os.path.expanduser("~/.openclaw/erpc
 def init_homehealth_schema(db_path: str = DB_PATH) -> dict:
     """Create home health expansion tables and indexes."""
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
+    from erpclaw_lib.db import setup_pragmas
+    setup_pragmas(conn)
 
     tables_created = 0
     indexes_created = 0
@@ -39,8 +38,8 @@ def init_homehealth_schema(db_path: str = DB_PATH) -> dict:
             visit_status        TEXT NOT NULL DEFAULT 'scheduled'
                                 CHECK(visit_status IN ('scheduled','in_progress','completed','missed','cancelled')),
             notes               TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -68,8 +67,8 @@ def init_homehealth_schema(db_path: str = DB_PATH) -> dict:
             plan_status                 TEXT NOT NULL DEFAULT 'active'
                                         CHECK(plan_status IN ('active','on_hold','discharged','expired','recertified')),
             notes                       TEXT,
-            created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at                  TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at                  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at                  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -93,8 +92,8 @@ def init_homehealth_schema(db_path: str = DB_PATH) -> dict:
             assessment_date     TEXT NOT NULL,
             m_items             TEXT,
             notes               TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -123,8 +122,8 @@ def init_homehealth_schema(db_path: str = DB_PATH) -> dict:
             status              TEXT NOT NULL DEFAULT 'active'
                                 CHECK(status IN ('active','on_hold','completed','cancelled')),
             notes               TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1

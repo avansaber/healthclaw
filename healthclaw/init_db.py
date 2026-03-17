@@ -27,7 +27,8 @@ REQUIRED_FOUNDATION = [
 
 def create_healthclaw_tables(db_path):
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA foreign_keys=ON")
+    from erpclaw_lib.db import setup_pragmas
+    setup_pragmas(conn)
 
     # ── Verify ERPClaw foundation ────────────────────────────────
     tables = [r[0] for r in conn.execute(
@@ -84,8 +85,8 @@ def create_healthclaw_tables(db_path):
                             CHECK(status IN ('active','inactive','deceased')),
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_patient_company
             ON healthclaw_patient(company_id);
@@ -126,8 +127,8 @@ def create_healthclaw_tables(db_path):
             status          TEXT NOT NULL DEFAULT 'active'
                             CHECK(status IN ('active','inactive','expired','terminated')),
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_ins_patient
             ON healthclaw_patient_insurance(patient_id);
@@ -150,8 +151,8 @@ def create_healthclaw_tables(db_path):
                             CHECK(status IN ('active','inactive','resolved')),
             noted_by_id     TEXT REFERENCES employee(id) ON DELETE RESTRICT,
             notes           TEXT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_allergy_patient
             ON healthclaw_allergy(patient_id);
@@ -169,8 +170,8 @@ def create_healthclaw_tables(db_path):
             status          TEXT NOT NULL DEFAULT 'active'
                             CHECK(status IN ('active','resolved','chronic')),
             notes           TEXT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_medhist_patient
             ON healthclaw_medical_history(patient_id);
@@ -188,8 +189,8 @@ def create_healthclaw_tables(db_path):
             email           TEXT,
             address         TEXT,
             is_primary      INTEGER NOT NULL DEFAULT 0 CHECK(is_primary IN (0,1)),
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_pcontact_patient
             ON healthclaw_patient_contact(patient_id);
@@ -212,8 +213,8 @@ def create_healthclaw_tables(db_path):
             obtained_by_id  TEXT REFERENCES employee(id) ON DELETE RESTRICT,
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_consent_patient
             ON healthclaw_consent(patient_id);
@@ -239,8 +240,8 @@ def create_healthclaw_tables(db_path):
             status          TEXT NOT NULL DEFAULT 'active'
                             CHECK(status IN ('active','inactive')),
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_provsched_provider
             ON healthclaw_provider_schedule(provider_id);
@@ -257,8 +258,8 @@ def create_healthclaw_tables(db_path):
             reason          TEXT NOT NULL CHECK(reason IN ('vacation','meeting','personal','maintenance','holiday','other')),
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_schedblock_provider
             ON healthclaw_schedule_block(provider_id);
@@ -290,8 +291,8 @@ def create_healthclaw_tables(db_path):
             check_out_time  TEXT,
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_appt_company
             ON healthclaw_appointment(company_id);
@@ -315,7 +316,7 @@ def create_healthclaw_tables(db_path):
             sent_at         TEXT,
             status          TEXT NOT NULL DEFAULT 'pending'
                             CHECK(status IN ('pending','sent','failed','cancelled')),
-            created_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_reminder_appt
             ON healthclaw_appointment_reminder(appointment_id);
@@ -338,8 +339,8 @@ def create_healthclaw_tables(db_path):
                             CHECK(status IN ('waiting','offered','accepted','expired','cancelled')),
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_waitlist_patient
             ON healthclaw_waitlist(patient_id);
@@ -378,8 +379,8 @@ def create_healthclaw_tables(db_path):
                             CHECK(status IN ('open','in_progress','completed','cancelled')),
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_encounter_company
             ON healthclaw_encounter(company_id);
@@ -402,7 +403,7 @@ def create_healthclaw_tables(db_path):
             encounter_id    TEXT NOT NULL REFERENCES healthclaw_encounter(id) ON DELETE RESTRICT,
             patient_id      TEXT NOT NULL REFERENCES healthclaw_patient(id) ON DELETE RESTRICT,
             recorded_by_id  TEXT REFERENCES employee(id) ON DELETE RESTRICT,
-            recorded_at     TEXT NOT NULL DEFAULT (datetime('now')),
+            recorded_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             temperature     TEXT,           -- Fahrenheit
             temperature_site TEXT CHECK(temperature_site IN ('oral','tympanic','axillary','rectal','temporal')),
             heart_rate      INTEGER,        -- bpm
@@ -415,7 +416,7 @@ def create_healthclaw_tables(db_path):
             bmi             TEXT,           -- calculated
             pain_level      INTEGER CHECK(pain_level BETWEEN 0 AND 10),
             notes           TEXT,
-            created_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_vitals_encounter
             ON healthclaw_vitals(encounter_id);
@@ -436,8 +437,8 @@ def create_healthclaw_tables(db_path):
             onset_date      TEXT,
             diagnosed_by_id TEXT REFERENCES employee(id) ON DELETE RESTRICT,
             notes           TEXT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_dx_encounter
             ON healthclaw_diagnosis(encounter_id);
@@ -488,8 +489,8 @@ def create_healthclaw_tables(db_path):
             discontinued_reason TEXT,
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_rx_encounter
             ON healthclaw_prescription(encounter_id);
@@ -521,8 +522,8 @@ def create_healthclaw_tables(db_path):
                             CHECK(status IN ('planned','in_progress','completed','cancelled')),
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_proc_encounter
             ON healthclaw_procedure(encounter_id);
@@ -555,8 +556,8 @@ def create_healthclaw_tables(db_path):
             cosigned_at     TEXT,
             status          TEXT NOT NULL DEFAULT 'draft'
                             CHECK(status IN ('draft','signed','cosigned','amended','addended')),
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_note_encounter
             ON healthclaw_clinical_note(encounter_id);
@@ -584,8 +585,8 @@ def create_healthclaw_tables(db_path):
                             CHECK(status IN ('pending','in_progress','completed','cancelled')),
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_order_encounter
             ON healthclaw_order(encounter_id);
@@ -616,8 +617,8 @@ def create_healthclaw_tables(db_path):
             status          TEXT NOT NULL DEFAULT 'active'
                             CHECK(status IN ('active','inactive','expired')),
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_feesched_company
             ON healthclaw_fee_schedule(company_id);
@@ -634,8 +635,8 @@ def create_healthclaw_tables(db_path):
             allowed_amount  TEXT NOT NULL DEFAULT '0',   -- payer's max allowable
             unit_count      INTEGER NOT NULL DEFAULT 1,
             modifier        TEXT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now')),
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(fee_schedule_id, cpt_code, modifier)
         );
         CREATE INDEX IF NOT EXISTS idx_hc_fsitem_schedule
@@ -671,8 +672,8 @@ def create_healthclaw_tables(db_path):
                             CHECK(charge_status IN ('unbilled','billed','paid','adjusted','void')),
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_charge_company
             ON healthclaw_charge(company_id);
@@ -727,8 +728,8 @@ def create_healthclaw_tables(db_path):
             appeal_deadline TEXT,
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_claim_company
             ON healthclaw_claim(company_id);
@@ -766,8 +767,8 @@ def create_healthclaw_tables(db_path):
             patient_amount  TEXT NOT NULL DEFAULT '0',
             denial_reason   TEXT,
             remark_codes    TEXT,            -- ANSI remark codes
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_claimline_claim
             ON healthclaw_claim_line(claim_id);
@@ -795,8 +796,8 @@ def create_healthclaw_tables(db_path):
             eob_date        TEXT,            -- explanation of benefits date
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_posting_claim
             ON healthclaw_payment_posting(claim_id);
@@ -824,8 +825,8 @@ def create_healthclaw_tables(db_path):
             status          TEXT NOT NULL DEFAULT 'active'
                             CHECK(status IN ('active','inactive','expired')),
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_formulary_company
             ON healthclaw_formulary(company_id);
@@ -851,8 +852,8 @@ def create_healthclaw_tables(db_path):
             max_daily_dose  TEXT,
             status          TEXT NOT NULL DEFAULT 'active'
                             CHECK(status IN ('active','inactive','recalled')),
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now')),
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(formulary_id, item_id)
         );
         CREATE INDEX IF NOT EXISTS idx_hc_fitem_formulary
@@ -882,8 +883,8 @@ def create_healthclaw_tables(db_path):
                             CHECK(status IN ('dispensed','returned','recalled','voided')),
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_disp_rx
             ON healthclaw_dispensing(prescription_id);
@@ -926,8 +927,8 @@ def create_healthclaw_tables(db_path):
                                              'completed','cancelled')),
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_labord_company
             ON healthclaw_lab_order(company_id);
@@ -963,8 +964,8 @@ def create_healthclaw_tables(db_path):
             status          TEXT NOT NULL DEFAULT 'pending'
                             CHECK(status IN ('pending','in_progress','completed','cancelled')),
             notes           TEXT,             -- from hcadv
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_labtest_order
             ON healthclaw_lab_test(lab_order_id);
@@ -998,8 +999,8 @@ def create_healthclaw_tables(db_path):
             verified_by     TEXT,             -- from hcadv: verifier name (when no FK)
             notes           TEXT,
             result_notes    TEXT,             -- from hcadv: result-specific notes
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))  -- from hcadv
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP  -- from hcadv
         );
         CREATE INDEX IF NOT EXISTS idx_hc_labres_test
             ON healthclaw_lab_result(lab_test_id);
@@ -1032,8 +1033,8 @@ def create_healthclaw_tables(db_path):
             scheduled_date  TEXT,
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_imgord_company
             ON healthclaw_imaging_order(company_id);
@@ -1059,8 +1060,8 @@ def create_healthclaw_tables(db_path):
             status          TEXT NOT NULL DEFAULT 'preliminary'
                             CHECK(status IN ('preliminary','final','addended','corrected')),
             addendum        TEXT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_imgres_order
             ON healthclaw_imaging_result(imaging_order_id);
@@ -1100,8 +1101,8 @@ def create_healthclaw_tables(db_path):
                                              'completed','expired','cancelled')),
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_ref_company
             ON healthclaw_referral(company_id);
@@ -1144,8 +1145,8 @@ def create_healthclaw_tables(db_path):
             appeal_deadline TEXT,
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
-            created_at      TEXT DEFAULT (datetime('now')),
-            updated_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_auth_company
             ON healthclaw_prior_auth(company_id);
@@ -1169,7 +1170,7 @@ def create_healthclaw_tables(db_path):
             usage_date      TEXT NOT NULL,
             units_used      INTEGER NOT NULL DEFAULT 1,
             notes           TEXT,
-            created_at      TEXT DEFAULT (datetime('now'))
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_hc_authuse_auth
             ON healthclaw_auth_usage(prior_auth_id);
@@ -1202,8 +1203,8 @@ def create_healthclaw_tables(db_path):
             reorder_level       INTEGER NOT NULL DEFAULT 0,
             is_active           INTEGER NOT NULL DEFAULT 1,
             notes               TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_med_company ON healthclaw_medication(company_id)")
@@ -1225,7 +1226,7 @@ def create_healthclaw_tables(db_path):
             lot_number          TEXT,
             expiration_date     TEXT,
             notes               TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_disp_company ON healthclaw_dispense_log(company_id)")
@@ -1246,8 +1247,8 @@ def create_healthclaw_tables(db_path):
             default_fee         TEXT NOT NULL DEFAULT '0.00',
             is_active           INTEGER NOT NULL DEFAULT 1,
             notes               TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_pc_company ON healthclaw_procedure_code(company_id)")
@@ -1265,7 +1266,7 @@ def create_healthclaw_tables(db_path):
                                 CHECK(severity IN ('minor','moderate','major','contraindicated')),
             description         TEXT NOT NULL,
             recommendation      TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_di_company ON healthclaw_drug_interaction(company_id)")
@@ -1287,7 +1288,7 @@ def create_healthclaw_tables(db_path):
             witness             TEXT,
             log_date            TEXT NOT NULL,
             notes               TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_csl_company ON healthclaw_controlled_substance_log(company_id)")
@@ -1317,11 +1318,16 @@ def create_healthclaw_tables(db_path):
     for company_row in companies:
         company_id = company_row[0]
         for entity_type, prefix in naming_series:
-            conn.execute(
-                "INSERT OR IGNORE INTO naming_series (id, entity_type, prefix, current_value, company_id) "
-                "VALUES (?, ?, ?, 0, ?)",
-                (str(uuid.uuid4()), entity_type, prefix, company_id)
-            )
+            existing = conn.execute(
+                "SELECT 1 FROM naming_series WHERE entity_type = ? AND prefix = ? AND company_id = ?",
+                (entity_type, prefix, company_id)
+            ).fetchone()
+            if not existing:
+                conn.execute(
+                    "INSERT INTO naming_series (id, entity_type, prefix, current_value, company_id) "
+                    "VALUES (?, ?, ?, 0, ?)",
+                    (str(uuid.uuid4()), entity_type, prefix, company_id)
+                )
 
     conn.commit()
 

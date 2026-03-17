@@ -15,7 +15,7 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, dynamic_update, update_row
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, dynamic_update, update_row, now, days_between
 except ImportError:
     pass
 
@@ -58,12 +58,12 @@ def add_procedure_code(conn, args):
     default_fee = str(round_currency(to_decimal(getattr(args, "default_fee", None) or "0.00")))
 
     pc_id = str(uuid.uuid4())
-    now = _now_iso()
+    _ts = _now_iso()
     sql, _ = insert_row("healthclaw_procedure_code", {"id": P(), "company_id": P(), "code": P(), "code_type": P(), "description": P(), "category": P(), "default_fee": P(), "is_active": P(), "notes": P(), "created_at": P(), "updated_at": P()})
     conn.execute(sql,
         (pc_id, args.company_id, args.code, code_type, args.description,
          getattr(args, "category", None), default_fee, 1,
-         getattr(args, "notes", None), now, now)
+         getattr(args, "notes", None), _ts, _ts)
     )
     audit(conn, "healthclaw_procedure_code", pc_id, "health-add-procedure-code", args.company_id)
     conn.commit()
@@ -87,7 +87,7 @@ def list_procedure_codes(conn, args):
         q_count = q_count.where(t.category == P()); q_rows = q_rows.where(t.category == P()); params.append(args.category)
     if getattr(args, "search", None):
         s = f"%{args.search}%"
-        crit = LiteralValue("(\"code\" LIKE ? OR \"description\" LIKE ?)")
+        crit = LiteralValue("(LOWER(\"code\") LIKE LOWER(?) OR LOWER(\"description\") LIKE LOWER(?))")
         q_count = q_count.where(crit); q_rows = q_rows.where(crit)
         params.extend([s, s])
 
@@ -125,7 +125,7 @@ def add_charge(conn, args):
         err("--icd10-codes must be valid JSON array")
 
     charge_id = str(uuid.uuid4())
-    now = _now_iso()
+    _ts = _now_iso()
     sql, _ = insert_row("healthclaw_charge", {"id": P(), "company_id": P(), "patient_id": P(), "provider_id": P(), "procedure_code_id": P(), "service_date": P(), "cpt_code": P(), "icd10_codes": P(), "description": P(), "quantity": P(), "unit_fee": P(), "total_fee": P(), "charge_status": P(), "notes": P(), "created_at": P(), "updated_at": P()})
     conn.execute(sql,
         (charge_id, args.company_id, args.patient_id, args.provider_id,
@@ -133,7 +133,7 @@ def add_charge(conn, args):
          getattr(args, "cpt_code", None), icd10_codes,
          getattr(args, "description", None), quantity, unit_fee, total_fee,
          "unbilled",
-         getattr(args, "notes", None), now, now)
+         getattr(args, "notes", None), _ts, _ts)
     )
     audit(conn, "healthclaw_charge", charge_id, "health-add-charge", args.company_id)
     conn.commit()
@@ -158,7 +158,7 @@ def list_charges(conn, args):
         q_count = q_count.where(t.charge_status == P()); q_rows = q_rows.where(t.charge_status == P()); params.append(charge_status)
     if getattr(args, "search", None):
         s = f"%{args.search}%"
-        crit = LiteralValue("(\"cpt_code\" LIKE ? OR \"description\" LIKE ? OR \"notes\" LIKE ?)")
+        crit = LiteralValue("(LOWER(\"cpt_code\") LIKE LOWER(?) OR LOWER(\"description\") LIKE LOWER(?) OR LOWER(\"notes\") LIKE LOWER(?))")
         q_count = q_count.where(crit); q_rows = q_rows.where(crit)
         params.extend([s, s, s])
 
@@ -214,7 +214,7 @@ def add_claim(conn, args):
             total_charged += to_decimal(row[0])
 
     claim_id = str(uuid.uuid4())
-    now = _now_iso()
+    _ts = _now_iso()
     sql, _ = insert_row("healthclaw_claim", {"id": P(), "company_id": P(), "patient_id": P(), "payer_name": P(), "payer_id_number": P(), "policy_number": P(), "group_number": P(), "claim_number": P(), "charge_ids": P(), "total_charged": P(), "total_allowed": P(), "total_paid": P(), "total_adjustment": P(), "patient_responsibility": P(), "claim_status": P(), "notes": P(), "created_at": P(), "updated_at": P()})
     conn.execute(sql,
         (claim_id, args.company_id, args.patient_id, args.payer_name,
@@ -226,7 +226,7 @@ def add_claim(conn, args):
          str(round_currency(total_charged)),
          "0.00", "0.00", "0.00", "0.00",
          "draft",
-         getattr(args, "notes", None), now, now)
+         getattr(args, "notes", None), _ts, _ts)
     )
     audit(conn, "healthclaw_claim", claim_id, "health-add-claim", args.company_id)
     conn.commit()
@@ -254,7 +254,7 @@ def list_claims(conn, args):
         q_count = q_count.where(t.payer_name == P()); q_rows = q_rows.where(t.payer_name == P()); params.append(args.payer_name)
     if getattr(args, "search", None):
         s = f"%{args.search}%"
-        crit = LiteralValue("(\"payer_name\" LIKE ? OR \"claim_number\" LIKE ? OR \"notes\" LIKE ?)")
+        crit = LiteralValue("(LOWER(\"payer_name\") LIKE LOWER(?) OR LOWER(\"claim_number\") LIKE LOWER(?) OR LOWER(\"notes\") LIKE LOWER(?))")
         q_count = q_count.where(crit); q_rows = q_rows.where(crit)
         params.extend([s, s, s])
 
@@ -303,11 +303,11 @@ def submit_claim(conn, args):
     if claim["claim_status"] not in ("draft", "appealed"):
         err(f"Cannot submit claim with status: {claim['claim_status']}. Must be draft or appealed")
 
-    now = _now_iso()
+    _ts = _now_iso()
     sql = update_row("healthclaw_claim",
-        data={"claim_status": "submitted", "submitted_date": P(), "updated_at": LiteralValue("datetime('now')")},
+        data={"claim_status": "submitted", "submitted_date": P(), "updated_at": now()},
         where={"id": P()})
-    conn.execute(sql, (now, claim_id))
+    conn.execute(sql, (_ts, claim_id))
 
     # Update associated charges to billed
     charge_ids_raw = claim.get("charge_ids", "[]")
@@ -316,14 +316,14 @@ def submit_claim(conn, args):
     except (json.JSONDecodeError, TypeError):
         charge_ids = []
     _chg_sql = update_row("healthclaw_charge",
-        data={"charge_status": "billed", "updated_at": LiteralValue("datetime('now')")},
+        data={"charge_status": "billed", "updated_at": now()},
         where={"id": P()})
     for cid in charge_ids:
         conn.execute(_chg_sql, (cid,))
 
     audit(conn, "healthclaw_claim", claim_id, "health-submit-claim", claim["company_id"])
     conn.commit()
-    ok({"id": claim_id, "claim_status": "submitted", "submitted_date": now,
+    ok({"id": claim_id, "claim_status": "submitted", "submitted_date": _ts,
         "charges_billed": len(charge_ids)})
 
 
@@ -352,7 +352,7 @@ def add_payment_posting(conn, args):
         getattr(args, "patient_responsibility", None) or "0.00")))
 
     pp_id = str(uuid.uuid4())
-    now = _now_iso()
+    _ts = _now_iso()
     sql, _ = insert_row("healthclaw_payment_posting", {"id": P(), "company_id": P(), "claim_id": P(), "charge_id": P(), "patient_id": P(), "payer_name": P(), "posting_date": P(), "allowed_amount": P(), "paid_amount": P(), "adjustment": P(), "patient_responsibility": P(), "payment_method": P(), "check_number": P(), "notes": P(), "created_at": P()})
 
     conn.execute(sql,
@@ -361,19 +361,21 @@ def add_payment_posting(conn, args):
          adjustment, patient_responsibility,
          getattr(args, "payment_method", None),
          getattr(args, "check_number", None),
-         getattr(args, "notes", None), now)
+         getattr(args, "notes", None), _ts)
     )
 
     # PyPika: skipped — complex CAST arithmetic expression for claim totals
+    from datetime import datetime as _dt, timezone as _tz
+    _now_str = _dt.now(_tz.utc).strftime('%Y-%m-%d %H:%M:%S')
     conn.execute(
         """UPDATE healthclaw_claim SET
-           total_allowed = CAST((CAST(total_allowed AS REAL) + CAST(? AS REAL)) AS TEXT),
-           total_paid = CAST((CAST(total_paid AS REAL) + CAST(? AS REAL)) AS TEXT),
-           total_adjustment = CAST((CAST(total_adjustment AS REAL) + CAST(? AS REAL)) AS TEXT),
-           patient_responsibility = CAST((CAST(patient_responsibility AS REAL) + CAST(? AS REAL)) AS TEXT),
-           updated_at = datetime('now')
+           total_allowed = CAST((CAST(total_allowed AS NUMERIC) + CAST(? AS NUMERIC)) AS TEXT),
+           total_paid = CAST((CAST(total_paid AS NUMERIC) + CAST(? AS NUMERIC)) AS TEXT),
+           total_adjustment = CAST((CAST(total_adjustment AS NUMERIC) + CAST(? AS NUMERIC)) AS TEXT),
+           patient_responsibility = CAST((CAST(patient_responsibility AS NUMERIC) + CAST(? AS NUMERIC)) AS TEXT),
+           updated_at = ?
            WHERE id = ?""",
-        (allowed_amount, paid_amount, adjustment, patient_responsibility, args.claim_id)
+        (allowed_amount, paid_amount, adjustment, patient_responsibility, _now_str, args.claim_id)
     )
 
     audit(conn, "healthclaw_payment_posting", pp_id, "health-add-payment-posting", args.company_id)
@@ -418,10 +420,11 @@ def aging_report(conn, args):
         where.append("company_id = ?"); params.append(company_id)
     where_sql = " AND ".join(where)
 
-    # PyPika: skipped — complex julianday() calculation
+    # Dialect-aware days_between helper replaces julianday calculation
+    days_expr = days_between("'now'", "service_date").get_sql(quote_char=None)
     rows = conn.execute(
         f"""SELECT *,
-            CAST(julianday('now') - julianday(service_date) AS INTEGER) as days_outstanding
+            CAST({days_expr} AS INTEGER) as days_outstanding
             FROM healthclaw_charge
             WHERE {where_sql}
             ORDER BY service_date ASC""",

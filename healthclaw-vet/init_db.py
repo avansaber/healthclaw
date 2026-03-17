@@ -13,9 +13,8 @@ DB_PATH = os.environ.get("ERPCLAW_DB_PATH", os.path.expanduser("~/.openclaw/erpc
 def init_vet_schema(db_path: str = DB_PATH) -> dict:
     """Create vet expansion tables and indexes."""
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
+    from erpclaw_lib.db import setup_pragmas
+    setup_pragmas(conn)
 
     tables_created = 0
     indexes_created = 0
@@ -37,8 +36,8 @@ def init_vet_schema(db_path: str = DB_PATH) -> dict:
             spay_neuter_status  TEXT DEFAULT 'unknown'
                                 CHECK(spay_neuter_status IN ('intact','spayed','neutered','unknown')),
             reproductive_status TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -67,8 +66,8 @@ def init_vet_schema(db_path: str = DB_PATH) -> dict:
             status                  TEXT NOT NULL DEFAULT 'checked_in'
                                     CHECK(status IN ('reserved','checked_in','checked_out','cancelled')),
             notes                   TEXT,
-            created_at              TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -95,8 +94,8 @@ def init_vet_schema(db_path: str = DB_PATH) -> dict:
             route               TEXT CHECK(route IN ('oral','injectable','topical','ophthalmic','otic','other')),
             frequency           TEXT,
             notes               TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -122,8 +121,8 @@ def init_vet_schema(db_path: str = DB_PATH) -> dict:
             is_primary                  INTEGER NOT NULL DEFAULT 0,
             financial_responsibility    INTEGER NOT NULL DEFAULT 1,
             notes                       TEXT,
-            created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at                  TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at                  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at                  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1

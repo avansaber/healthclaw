@@ -15,7 +15,7 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, update_row
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, update_row, now, hours_between
 except ImportError:
     pass
 
@@ -55,7 +55,7 @@ def add_lab_test(conn, args):
         turnaround_hours = int(turnaround_hours)
 
     test_id = str(uuid.uuid4())
-    now = _now_iso()
+    _ts = _now_iso()
     sql, _ = insert_row("healthclaw_lab_test", {"id": P(), "company_id": P(), "test_name": P(), "test_code": P(), "loinc_code": P(), "category": P(), "specimen_type": P(), "reference_range": P(), "unit": P(), "turnaround_hours": P(), "base_price": P(), "is_active": P(), "notes": P(), "created_at": P(), "updated_at": P()})
     conn.execute(sql,
         (test_id, args.company_id, args.test_name,
@@ -66,7 +66,7 @@ def add_lab_test(conn, args):
          getattr(args, "reference_range", None),
          getattr(args, "unit", None),
          turnaround_hours, base_price, 1,
-         getattr(args, "notes", None), now, now)
+         getattr(args, "notes", None), _ts, _ts)
     )
     audit(conn, "healthclaw_lab_test", test_id, "health-add-lab-test", args.company_id)
     conn.commit()
@@ -88,7 +88,7 @@ def list_lab_tests(conn, args):
         q_count = q_count.where(t.category == P()); q_rows = q_rows.where(t.category == P()); params.append(args.category)
     if getattr(args, "search", None):
         s = f"%{args.search}%"
-        crit = LiteralValue("(\"test_name\" LIKE ? OR \"test_code\" LIKE ? OR \"loinc_code\" LIKE ?)")
+        crit = LiteralValue("(LOWER(\"test_name\") LIKE LOWER(?) OR LOWER(\"test_code\") LIKE LOWER(?) OR LOWER(\"loinc_code\") LIKE LOWER(?))")
         q_count = q_count.where(crit); q_rows = q_rows.where(crit)
         params.extend([s, s, s])
 
@@ -132,14 +132,14 @@ def add_lab_order(conn, args):
     fasting_required = int(getattr(args, "fasting_required", None) or 0)
 
     order_id = str(uuid.uuid4())
-    now = _now_iso()
+    _ts = _now_iso()
     sql, _ = insert_row("healthclaw_lab_order", {"id": P(), "company_id": P(), "patient_id": P(), "ordering_provider": P(), "lab_test_id": P(), "order_date": P(), "priority": P(), "order_status": P(), "clinical_notes": P(), "fasting_required": P(), "notes": P(), "created_at": P(), "updated_at": P()})
     conn.execute(sql,
         (order_id, args.company_id, args.patient_id, args.ordering_provider,
          args.lab_test_id, args.order_date, priority, "ordered",
          getattr(args, "clinical_notes", None),
          fasting_required,
-         getattr(args, "notes", None), now, now)
+         getattr(args, "notes", None), _ts, _ts)
     )
     audit(conn, "healthclaw_lab_order", order_id, "health-add-lab-order", args.company_id)
     conn.commit()
@@ -169,7 +169,7 @@ def list_lab_orders(conn, args):
         q_count = q_count.where(t.priority == P()); q_rows = q_rows.where(t.priority == P()); params.append(args.priority)
     if getattr(args, "search", None):
         s = f"%{args.search}%"
-        crit = LiteralValue("(\"clinical_notes\" LIKE ? OR \"notes\" LIKE ?)")
+        crit = LiteralValue("(LOWER(\"clinical_notes\") LIKE LOWER(?) OR LOWER(\"notes\") LIKE LOWER(?))")
         q_count = q_count.where(crit); q_rows = q_rows.where(crit)
         params.extend([s, s])
 
@@ -213,7 +213,7 @@ def add_lab_result(conn, args):
     is_critical = int(getattr(args, "is_critical", None) or 0)
 
     result_id = str(uuid.uuid4())
-    now = _now_iso()
+    _ts = _now_iso()
     sql, _ = insert_row("healthclaw_lab_result", {"id": P(), "company_id": P(), "lab_order_id": P(), "lab_test_id": P(), "patient_id": P(), "result_value": P(), "result_unit": P(), "reference_range": P(), "is_abnormal": P(), "is_critical": P(), "performed_by": P(), "verified_by": P(), "result_date": P(), "result_notes": P(), "created_at": P(), "updated_at": P()})
 
     conn.execute(sql,
@@ -226,14 +226,14 @@ def add_lab_result(conn, args):
          getattr(args, "performed_by", None),
          getattr(args, "verified_by", None),
          args.result_date,
-         getattr(args, "result_notes", None), now, now)
+         getattr(args, "result_notes", None), _ts, _ts)
     )
 
     # Update order status to completed
     _upd_sql = update_row("healthclaw_lab_order",
-        data={"order_status": "completed", "completed_at": P(), "updated_at": LiteralValue("datetime('now')")},
+        data={"order_status": "completed", "completed_at": P(), "updated_at": now()},
         where={"id": P()})
-    conn.execute(_upd_sql, (now, args.lab_order_id))
+    conn.execute(_upd_sql, (_ts, args.lab_order_id))
 
     audit(conn, "healthclaw_lab_result", result_id, "health-add-lab-result", args.company_id)
     conn.commit()
@@ -298,7 +298,7 @@ def mark_lab_critical(conn, args):
         err(f"Lab result {result_id} not found")
 
     _upd_sql = update_row("healthclaw_lab_result",
-        data={"is_critical": 1, "is_abnormal": 1, "updated_at": LiteralValue("datetime('now')")},
+        data={"is_critical": 1, "is_abnormal": 1, "updated_at": now()},
         where={"id": P()})
     conn.execute(_upd_sql, (result_id,))
     audit(conn, "healthclaw_lab_result", result_id, "health-mark-lab-critical",
@@ -323,10 +323,11 @@ def lab_turnaround_report(conn, args):
         where.append("lo.order_date <= ?"); params.append(date_to)
     where_sql = " AND ".join(where)
 
-    # PyPika: skipped — complex JOIN with julianday calculation
+    # Dialect-aware hours_between helper replaces julianday calculation
+    hours_expr = hours_between("lo.completed_at", "lo.order_date").get_sql(quote_char=None)
     rows = conn.execute(
         f"""SELECT lo.*, lt.test_name, lt.turnaround_hours as expected_hours,
-            ROUND((julianday(lo.completed_at) - julianday(lo.order_date)) * 24, 1) as actual_hours
+            ROUND({hours_expr}, 1) as actual_hours
             FROM healthclaw_lab_order lo
             JOIN healthclaw_lab_test lt ON lo.lab_test_id = lt.id
             WHERE {where_sql}

@@ -15,7 +15,7 @@ try:
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, Case, LiteralValue, dynamic_update, update_row
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, Case, LiteralValue, dynamic_update, update_row, now
 except ImportError:
     pass
 
@@ -68,7 +68,7 @@ def add_medication(conn, args):
     reorder_level = int(getattr(args, "reorder_level", None) or 0)
 
     med_id = str(uuid.uuid4())
-    now = _now_iso()
+    _ts = _now_iso()
     sql, _ = insert_row("healthclaw_medication", {"id": P(), "company_id": P(), "name": P(), "generic_name": P(), "ndc_code": P(), "dea_schedule": P(), "dosage_form": P(), "strength": P(), "manufacturer": P(), "unit_price": P(), "quantity_on_hand": P(), "reorder_level": P(), "is_active": P(), "notes": P(), "created_at": P(), "updated_at": P()})
     conn.execute(sql,
         (med_id, args.company_id, args.name,
@@ -79,7 +79,7 @@ def add_medication(conn, args):
          getattr(args, "strength", None),
          getattr(args, "manufacturer", None),
          unit_price, quantity_on_hand, reorder_level, 1,
-         getattr(args, "notes", None), now, now)
+         getattr(args, "notes", None), _ts, _ts)
     )
     audit(conn, "healthclaw_medication", med_id, "health-add-medication", args.company_id)
     conn.commit()
@@ -101,7 +101,7 @@ def list_medications(conn, args):
         q_count = q_count.where(t.dea_schedule == P()); q_rows = q_rows.where(t.dea_schedule == P()); params.append(args.dea_schedule)
     if getattr(args, "search", None):
         s = f"%{args.search}%"
-        crit = LiteralValue("(\"name\" LIKE ? OR \"generic_name\" LIKE ? OR \"ndc_code\" LIKE ?)")
+        crit = LiteralValue("(LOWER(\"name\") LIKE LOWER(?) OR LOWER(\"generic_name\") LIKE LOWER(?) OR LOWER(\"ndc_code\") LIKE LOWER(?))")
         q_count = q_count.where(crit); q_rows = q_rows.where(crit)
         params.extend([s, s, s])
 
@@ -167,7 +167,7 @@ def update_medication(conn, args):
 
     if not data:
         err("No fields to update")
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = now()
     sql, params = dynamic_update("healthclaw_medication", data, {"id": med_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_medication", med_id, "health-update-medication", getattr(args, "company_id", None))
@@ -206,14 +206,14 @@ def add_prescription(conn, args):
 
     rx_id = str(uuid.uuid4())
     rx_number = getattr(args, "rx_number", None)
-    now = _now_iso()
+    _ts = _now_iso()
     sql, _ = insert_row("healthclaw_prescription", {"id": P(), "company_id": P(), "patient_id": P(), "prescriber_id": P(), "medication_id": P(), "rx_number": P(), "dosage": P(), "frequency": P(), "route": P(), "quantity_prescribed": P(), "refills_authorized": P(), "refills_used": P(), "dea_number": P(), "rx_status": P(), "prescribed_date": P(), "expiry_date": P(), "notes": P(), "created_at": P(), "updated_at": P()})
     conn.execute(sql,
         (rx_id, args.company_id, args.patient_id, args.prescriber_id,
          args.medication_id, rx_number, args.dosage, args.frequency, route,
          quantity_prescribed, refills_authorized, 0, dea_number,
          "active", args.prescribed_date, getattr(args, "expiry_date", None),
-         getattr(args, "notes", None), now, now)
+         getattr(args, "notes", None), _ts, _ts)
     )
     audit(conn, "healthclaw_prescription", rx_id, "health-add-prescription", args.company_id)
     conn.commit()
@@ -241,7 +241,7 @@ def list_prescriptions(conn, args):
         q_count = q_count.where(t.rx_status == P()); q_rows = q_rows.where(t.rx_status == P()); params.append(rx_status)
     if getattr(args, "search", None):
         s = f"%{args.search}%"
-        crit = LiteralValue("(\"dosage\" LIKE ? OR \"notes\" LIKE ? OR \"rx_number\" LIKE ?)")
+        crit = LiteralValue("(LOWER(\"dosage\") LIKE LOWER(?) OR LOWER(\"notes\") LIKE LOWER(?) OR LOWER(\"rx_number\") LIKE LOWER(?))")
         q_count = q_count.where(crit); q_rows = q_rows.where(crit)
         params.extend([s, s, s])
 
@@ -289,14 +289,14 @@ def fill_prescription(conn, args):
 
     # Create dispense log
     disp_id = str(uuid.uuid4())
-    now = _now_iso()
+    _ts = _now_iso()
     _disp_sql, _ = insert_row("healthclaw_dispense_log", {"id": P(), "company_id": P(), "prescription_id": P(), "medication_id": P(), "dispensed_by": P(), "quantity_dispensed": P(), "dispense_date": P(), "is_refill": P(), "lot_number": P(), "expiration_date": P(), "notes": P(), "created_at": P()})
     conn.execute(_disp_sql,
         (disp_id, rx["company_id"], rx_id, rx["medication_id"],
-         args.dispensed_by, quantity, now, 0,
+         args.dispensed_by, quantity, _ts, 0,
          getattr(args, "lot_number", None),
          getattr(args, "expiration_date", None),
-         getattr(args, "notes", None), now)
+         getattr(args, "notes", None), _ts)
     )
 
     # Update medication inventory
@@ -308,7 +308,7 @@ def fill_prescription(conn, args):
 
     # Update prescription status
     _rx_upd = update_row("healthclaw_prescription",
-        data={"rx_status": "filled", "updated_at": LiteralValue("datetime('now')")},
+        data={"rx_status": "filled", "updated_at": now()},
         where={"id": P()})
     conn.execute(_rx_upd, (rx_id,))
 
@@ -322,8 +322,8 @@ def fill_prescription(conn, args):
         conn.execute(_cs_sql,
             (cs_log_id, rx["company_id"], rx["medication_id"], rx_id,
              "dispensed", quantity, rx.get("dea_number"), args.dispensed_by,
-             getattr(args, "witness", None), now,
-             getattr(args, "notes", None), now)
+             getattr(args, "witness", None), _ts,
+             getattr(args, "notes", None), _ts)
         )
 
     audit(conn, "healthclaw_prescription", rx_id, "health-fill-prescription", rx["company_id"])
@@ -356,14 +356,14 @@ def refill_prescription(conn, args):
 
     # Create dispense log as refill
     disp_id = str(uuid.uuid4())
-    now = _now_iso()
+    _ts = _now_iso()
     _disp_sql, _ = insert_row("healthclaw_dispense_log", {"id": P(), "company_id": P(), "prescription_id": P(), "medication_id": P(), "dispensed_by": P(), "quantity_dispensed": P(), "dispense_date": P(), "is_refill": P(), "lot_number": P(), "expiration_date": P(), "notes": P(), "created_at": P()})
     conn.execute(_disp_sql,
         (disp_id, rx["company_id"], rx_id, rx["medication_id"],
-         args.dispensed_by, quantity, now, 1,
+         args.dispensed_by, quantity, _ts, 1,
          getattr(args, "lot_number", None),
          getattr(args, "expiration_date", None),
-         getattr(args, "notes", None), now)
+         getattr(args, "notes", None), _ts)
     )
 
     # Update medication inventory
@@ -377,7 +377,7 @@ def refill_prescription(conn, args):
     new_refills = rx["refills_used"] + 1
     new_status = "filled" if new_refills >= rx["refills_authorized"] else "active"
     _rx_upd = update_row("healthclaw_prescription",
-        data={"refills_used": P(), "rx_status": P(), "updated_at": LiteralValue("datetime('now')")},
+        data={"refills_used": P(), "rx_status": P(), "updated_at": now()},
         where={"id": P()})
     conn.execute(_rx_upd, (new_refills, new_status, rx_id))
 
@@ -391,8 +391,8 @@ def refill_prescription(conn, args):
         conn.execute(_cs_sql,
             (cs_log_id, rx["company_id"], rx["medication_id"], rx_id,
              "dispensed", quantity, rx.get("dea_number"), args.dispensed_by,
-             getattr(args, "witness", None), now,
-             getattr(args, "notes", None), now)
+             getattr(args, "witness", None), _ts,
+             getattr(args, "notes", None), _ts)
         )
 
     audit(conn, "healthclaw_prescription", rx_id, "health-refill-prescription", rx["company_id"])
@@ -420,16 +420,16 @@ def add_dispense_log(conn, args):
         err("--quantity-dispensed must be > 0")
 
     disp_id = str(uuid.uuid4())
-    now = _now_iso()
+    _ts = _now_iso()
     sql, _ = insert_row("healthclaw_dispense_log", {"id": P(), "company_id": P(), "prescription_id": P(), "medication_id": P(), "dispensed_by": P(), "quantity_dispensed": P(), "dispense_date": P(), "is_refill": P(), "lot_number": P(), "expiration_date": P(), "notes": P(), "created_at": P()})
 
     conn.execute(sql,
         (disp_id, args.company_id, args.prescription_id, rx["medication_id"],
-         args.dispensed_by, quantity, now,
+         args.dispensed_by, quantity, _ts,
          int(getattr(args, "is_refill", None) or 0),
          getattr(args, "lot_number", None),
          getattr(args, "expiration_date", None),
-         getattr(args, "notes", None), now)
+         getattr(args, "notes", None), _ts)
     )
     audit(conn, "healthclaw_dispense_log", disp_id, "health-add-dispense-log", args.company_id)
     conn.commit()

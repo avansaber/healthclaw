@@ -13,9 +13,8 @@ DB_PATH = os.environ.get("ERPCLAW_DB_PATH", os.path.expanduser("~/.openclaw/erpc
 def init_dental_schema(db_path: str = DB_PATH) -> dict:
     """Create dental expansion tables and indexes."""
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
+    from erpclaw_lib.db import setup_pragmas
+    setup_pragmas(conn)
 
     tables_created = 0
     indexes_created = 0
@@ -39,8 +38,8 @@ def init_dental_schema(db_path: str = DB_PATH) -> dict:
             status              TEXT NOT NULL DEFAULT 'active'
                                 CHECK(status IN ('active','resolved','monitoring')),
             notes               TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -70,8 +69,8 @@ def init_dental_schema(db_path: str = DB_PATH) -> dict:
             status              TEXT NOT NULL DEFAULT 'planned'
                                 CHECK(status IN ('planned','in_progress','completed','cancelled')),
             notes               TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -100,8 +99,8 @@ def init_dental_schema(db_path: str = DB_PATH) -> dict:
             status              TEXT NOT NULL DEFAULT 'proposed'
                                 CHECK(status IN ('proposed','accepted','in_progress','completed','cancelled')),
             notes               TEXT,
-            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1
@@ -130,8 +129,8 @@ def init_dental_schema(db_path: str = DB_PATH) -> dict:
             notes               TEXT,
             status              TEXT NOT NULL DEFAULT 'complete'
                                 CHECK(status IN ('in_progress','complete')),
-            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+            created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
     tables_created += 1

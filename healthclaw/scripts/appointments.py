@@ -343,7 +343,7 @@ def list_appointments(conn, args):
         params.append(args.status)
     if getattr(args, "search", None):
         # Search joins patient name via subquery
-        crit = LiteralValue("\"patient_id\" IN (SELECT \"id\" FROM \"healthclaw_patient\" WHERE \"full_name\" LIKE ?)")
+        crit = LiteralValue("\"patient_id\" IN (SELECT \"id\" FROM \"healthclaw_patient\" WHERE LOWER(\"full_name\") LIKE LOWER(?))")
         q_count = q_count.where(crit)
         q_rows = q_rows.where(crit)
         params.append(f"%{args.search}%")
