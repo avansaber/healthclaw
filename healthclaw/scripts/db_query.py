@@ -47,6 +47,8 @@ from adv_pharmacy import ACTIONS as ADV_PHARMACY_ACTIONS
 from adv_lab import ACTIONS as ADV_LAB_ACTIONS
 from adv_billing import ACTIONS as ADV_BILLING_ACTIONS
 from adv_reports import ACTIONS as ADV_REPORTS_ACTIONS
+from rcm import ACTIONS as RCM_ACTIONS
+from compliance import ACTIONS as COMPLIANCE_ACTIONS
 
 # ---------------------------------------------------------------------------
 # Merge all domain actions into one router
@@ -69,12 +71,18 @@ ACTIONS.update(ADV_LAB_ACTIONS)
 ACTIONS.update(ADV_BILLING_ACTIONS)
 ACTIONS.update(ADV_REPORTS_ACTIONS)
 
+# Merge RCM domain (payer registry + eligibility verification)
+ACTIONS.update(RCM_ACTIONS)
+
+# Merge Compliance domain (PHI audit, Good Faith Estimate, MIPS)
+ACTIONS.update(COMPLIANCE_ACTIONS)
+
 ACTIONS["status"] = lambda conn, args: ok({
     "skill": SKILL,
     "version": "2.0.0",
     "actions_available": len([k for k in ACTIONS if k != "status"]),
     "domains": ["patients", "appointments", "clinical", "billing", "inventory", "lab", "referrals",
-                "adv_pharmacy", "adv_lab", "adv_billing", "adv_reports"],
+                "adv_pharmacy", "adv_lab", "adv_billing", "adv_reports", "rcm", "compliance"],
     "database": DEFAULT_DB_PATH,
 })
 
@@ -318,7 +326,15 @@ def main():
     parser.add_argument("--filing-indicator")
     parser.add_argument("--sales-invoice-id")
     parser.add_argument("--denial-reason")
+    parser.add_argument("--denial-category")
+    parser.add_argument("--denial-code")
+    parser.add_argument("--denial-date")
     parser.add_argument("--appeal-deadline")
+    parser.add_argument("--appeal-method")
+    parser.add_argument("--appeal-reference")
+    parser.add_argument("--appeal-outcome")
+    parser.add_argument("--appeal-amount-recovered")
+    parser.add_argument("--months")
     parser.add_argument("--line-number")
     parser.add_argument("--diagnosis-pointers")
     parser.add_argument("--paid-amount")
@@ -444,6 +460,62 @@ def main():
     # ── ADV_REPORTS domain (healthclaw-advanced) ──────────────
     parser.add_argument("--date-from")
     parser.add_argument("--date-to")
+
+    # ── RCM domain (payer registry + eligibility + ERA/835) ─
+    parser.add_argument("--patient-insurance-id")
+    parser.add_argument("--coverage-status")
+    parser.add_argument("--check-method")
+    parser.add_argument("--edi-payer-id")
+    parser.add_argument("--electronic-filing-id")
+    parser.add_argument("--submission-method")
+    parser.add_argument("--timely-filing-days")
+    parser.add_argument("--era-enrollment")
+    parser.add_argument("--claims-address")
+    parser.add_argument("--claims-city")
+    parser.add_argument("--claims-state")
+    parser.add_argument("--claims-zip")
+    parser.add_argument("--payer-status")
+    parser.add_argument("--copay")
+    parser.add_argument("--coinsurance-pct")
+    parser.add_argument("--oop-met")
+    parser.add_argument("--plan-begin-date")
+    parser.add_argument("--plan-end-date")
+    parser.add_argument("--in-network")
+    parser.add_argument("--checked-by")
+
+    # ── RCM domain (ERA/835 processing) ─────────────────────
+    parser.add_argument("--era-file-id")
+    parser.add_argument("--claims-data")
+    parser.add_argument("--check-amount")
+    parser.add_argument("--eft-trace")
+    parser.add_argument("--file-name")
+    parser.add_argument("--posted-by")
+
+    # ── COMPLIANCE domain (PHI audit, GFE, MIPS) ─────────
+    parser.add_argument("--access-type")
+    parser.add_argument("--data-category")
+    parser.add_argument("--resource-id")
+    parser.add_argument("--ip-address")
+    parser.add_argument("--user-agent")
+    parser.add_argument("--access-reason")
+    parser.add_argument("--break-the-glass")
+    parser.add_argument("--user-id")
+    parser.add_argument("--action-name")
+    parser.add_argument("--days")
+    parser.add_argument("--estimate-id")
+    parser.add_argument("--procedure-codes")
+    parser.add_argument("--diagnosis-codes")
+    parser.add_argument("--measure-id")
+    parser.add_argument("--measure-type")
+    parser.add_argument("--numerator")
+    parser.add_argument("--denominator")
+    parser.add_argument("--exclusions")
+    parser.add_argument("--numerator-criteria")
+    parser.add_argument("--denominator-criteria")
+    parser.add_argument("--exclusion-criteria")
+    parser.add_argument("--benchmark")
+    parser.add_argument("--reporting-period")
+    parser.add_argument("--points-earned")
 
     args, unknown = parser.parse_known_args()
     check_unknown_args(parser, unknown)

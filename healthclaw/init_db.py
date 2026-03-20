@@ -725,7 +725,16 @@ def create_healthclaw_tables(db_path):
             submitted_date  TEXT,             -- from hcadv: date claim was submitted
             response_date   TEXT,             -- from hcadv: date payer responded
             denial_reason   TEXT,
+            denial_category TEXT CHECK (denial_category IN ('CO','PR','OA','PI')),
+            denial_code     TEXT,
+            denial_date     TEXT,
             appeal_deadline TEXT,
+            appeal_submitted_date TEXT,
+            appeal_method   TEXT CHECK (appeal_method IN ('written','phone','online')),
+            appeal_reference TEXT,
+            appeal_outcome  TEXT CHECK (appeal_outcome IN ('pending','overturned','upheld','partial')),
+            appeal_resolved_date TEXT,
+            appeal_amount_recovered TEXT,
             notes           TEXT,
             company_id      TEXT NOT NULL REFERENCES company(id) ON DELETE RESTRICT,
             created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -1296,6 +1305,227 @@ def create_healthclaw_tables(db_path):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_csl_rx ON healthclaw_controlled_substance_log(prescription_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_csl_date ON healthclaw_controlled_substance_log(log_date)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_csl_type ON healthclaw_controlled_substance_log(action_type)")
+
+    # ══════════════════════════════════════════════════════════════
+    # DOMAIN 12: PAYER MANAGEMENT (Phase 1 RCM)
+    # ══════════════════════════════════════════════════════════════
+
+    # -- healthclaw_payer --
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS healthclaw_payer (
+            id                  TEXT PRIMARY KEY,
+            company_id          TEXT NOT NULL REFERENCES company(id),
+            name                TEXT NOT NULL,
+            payer_type          TEXT NOT NULL CHECK (payer_type IN ('commercial','medicare','medicaid','tricare','workers_comp','self_pay','other')),
+            edi_payer_id        TEXT,
+            electronic_filing_id TEXT,
+            address             TEXT,
+            city                TEXT,
+            state               TEXT,
+            zip                 TEXT,
+            phone               TEXT,
+            claims_address      TEXT,
+            claims_city         TEXT,
+            claims_state        TEXT,
+            claims_zip          TEXT,
+            submission_method   TEXT NOT NULL DEFAULT 'electronic' CHECK (submission_method IN ('electronic','paper','portal')),
+            timely_filing_days  INTEGER DEFAULT 365,
+            era_enrollment      TEXT NOT NULL DEFAULT 'not_enrolled' CHECK (era_enrollment IN ('enrolled','not_enrolled','pending')),
+            default_fee_schedule_id TEXT,
+            notes               TEXT,
+            status              TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','inactive')),
+            created_at          TEXT DEFAULT (datetime('now')),
+            updated_at          TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_payer_company ON healthclaw_payer(company_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_payer_edi ON healthclaw_payer(edi_payer_id)")
+
+    # -- healthclaw_eligibility_check --
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS healthclaw_eligibility_check (
+            id                    TEXT PRIMARY KEY,
+            patient_id            TEXT NOT NULL REFERENCES healthclaw_patient(id),
+            patient_insurance_id  TEXT NOT NULL REFERENCES healthclaw_patient_insurance(id),
+            payer_id              TEXT REFERENCES healthclaw_payer(id),
+            check_date            TEXT NOT NULL,
+            check_method          TEXT NOT NULL DEFAULT 'manual' CHECK (check_method IN ('manual','electronic','phone')),
+            coverage_status       TEXT NOT NULL CHECK (coverage_status IN ('active','inactive','termed','pending','unknown')),
+            copay                 TEXT,
+            deductible            TEXT,
+            deductible_met        TEXT,
+            coinsurance_pct       TEXT,
+            out_of_pocket_max     TEXT,
+            oop_met               TEXT,
+            plan_begin_date       TEXT,
+            plan_end_date         TEXT,
+            in_network            INTEGER DEFAULT 1,
+            prior_auth_required   INTEGER DEFAULT 0,
+            notes                 TEXT,
+            checked_by            TEXT,
+            created_at            TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_eligibility_patient ON healthclaw_eligibility_check(patient_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_eligibility_date ON healthclaw_eligibility_check(check_date)")
+
+    # -- healthclaw_era_file (ERA/835 Electronic Remittance Processing) --
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS healthclaw_era_file (
+            id              TEXT PRIMARY KEY,
+            company_id      TEXT NOT NULL,
+            file_name       TEXT,
+            payer_id        TEXT,
+            received_date   TEXT NOT NULL,
+            check_number    TEXT,
+            check_amount    TEXT,
+            eft_trace       TEXT,
+            claim_count     INTEGER DEFAULT 0,
+            matched_count   INTEGER DEFAULT 0,
+            posted_amount   TEXT DEFAULT '0',
+            status          TEXT NOT NULL DEFAULT 'received' CHECK (status IN ('received','processing','posted','partial','error')),
+            posted_by       TEXT,
+            posted_at       TEXT,
+            notes           TEXT,
+            created_at      TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (company_id) REFERENCES company(id),
+            FOREIGN KEY (payer_id) REFERENCES healthclaw_payer(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_era_file_company ON healthclaw_era_file(company_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_era_file_date ON healthclaw_era_file(received_date)")
+
+    # -- healthclaw_era_claim_detail --
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS healthclaw_era_claim_detail (
+            id                  TEXT PRIMARY KEY,
+            era_file_id         TEXT NOT NULL,
+            claim_id            TEXT,
+            patient_name        TEXT,
+            patient_id          TEXT,
+            claim_number        TEXT,
+            service_date        TEXT,
+            billed_amount       TEXT DEFAULT '0',
+            allowed_amount      TEXT DEFAULT '0',
+            paid_amount         TEXT DEFAULT '0',
+            patient_responsibility TEXT DEFAULT '0',
+            adjustment_amount   TEXT DEFAULT '0',
+            adjustment_codes    TEXT,
+            remark_codes        TEXT,
+            match_status        TEXT NOT NULL DEFAULT 'unmatched' CHECK (match_status IN ('matched','unmatched','partial','denied')),
+            auto_posted         INTEGER DEFAULT 0,
+            created_at          TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (era_file_id) REFERENCES healthclaw_era_file(id),
+            FOREIGN KEY (claim_id) REFERENCES healthclaw_claim(id),
+            FOREIGN KEY (patient_id) REFERENCES healthclaw_patient(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_era_detail_file ON healthclaw_era_claim_detail(era_file_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_era_detail_claim ON healthclaw_era_claim_detail(claim_id)")
+
+    # ==========================================================
+    # DOMAIN 13: COMPLIANCE (Phase 2 — HIPAA, No Surprises Act, CMS)
+    # ==========================================================
+
+    # -- PHI Access Audit Log — HIPAA 45 C.F.R. 164.312(b) --
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS healthclaw_phi_access_log (
+            id              TEXT PRIMARY KEY,
+            user_id         TEXT,
+            patient_id      TEXT NOT NULL,
+            access_type     TEXT NOT NULL CHECK (access_type IN ('view','edit','print','export','delete')),
+            data_category   TEXT NOT NULL CHECK (data_category IN ('demographics','clinical','billing','insurance','medications','lab_results','imaging','notes','all')),
+            action_name     TEXT,
+            resource_id     TEXT,
+            ip_address      TEXT,
+            user_agent      TEXT,
+            access_reason   TEXT,
+            break_the_glass INTEGER DEFAULT 0,
+            created_at      TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (patient_id) REFERENCES healthclaw_patient(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_phi_patient ON healthclaw_phi_access_log(patient_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_phi_user ON healthclaw_phi_access_log(user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_phi_date ON healthclaw_phi_access_log(created_at)")
+
+    # -- Good Faith Estimate — No Surprises Act (2022) --
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS healthclaw_good_faith_estimate (
+            id              TEXT PRIMARY KEY,
+            company_id      TEXT NOT NULL,
+            patient_id      TEXT NOT NULL,
+            provider_id     TEXT,
+            estimate_date   TEXT NOT NULL,
+            procedure_codes TEXT,
+            diagnosis_codes TEXT,
+            items           TEXT,
+            total_estimate  TEXT NOT NULL DEFAULT '0',
+            facility_fee    TEXT DEFAULT '0',
+            provider_fee    TEXT DEFAULT '0',
+            insurance_applied INTEGER DEFAULT 0,
+            payer_id        TEXT,
+            estimated_insurance_payment TEXT DEFAULT '0',
+            estimated_patient_responsibility TEXT DEFAULT '0',
+            valid_until     TEXT,
+            status          TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','provided','expired','superseded')),
+            provided_at     TEXT,
+            notes           TEXT,
+            created_at      TEXT DEFAULT (datetime('now')),
+            updated_at      TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (company_id) REFERENCES company(id),
+            FOREIGN KEY (patient_id) REFERENCES healthclaw_patient(id),
+            FOREIGN KEY (payer_id) REFERENCES healthclaw_payer(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_gfe_patient ON healthclaw_good_faith_estimate(patient_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_gfe_date ON healthclaw_good_faith_estimate(estimate_date)")
+
+    # -- MIPS Quality Measures — CMS Merit-based Incentive Payment System --
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS healthclaw_quality_measure (
+            id                  TEXT PRIMARY KEY,
+            company_id          TEXT NOT NULL,
+            measure_id          TEXT NOT NULL,
+            name                TEXT NOT NULL,
+            category            TEXT NOT NULL CHECK (category IN ('quality','improvement_activities','promoting_interoperability','cost')),
+            description         TEXT,
+            numerator_criteria  TEXT,
+            denominator_criteria TEXT,
+            exclusion_criteria  TEXT,
+            measure_type        TEXT DEFAULT 'process' CHECK (measure_type IN ('process','outcome','structure','efficiency')),
+            reporting_period    TEXT,
+            benchmark           TEXT,
+            status              TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','retired')),
+            created_at          TEXT DEFAULT (datetime('now')),
+            updated_at          TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (company_id) REFERENCES company(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_qm_company ON healthclaw_quality_measure(company_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_qm_measure ON healthclaw_quality_measure(measure_id)")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS healthclaw_quality_measure_result (
+            id                  TEXT PRIMARY KEY,
+            measure_id          TEXT NOT NULL,
+            provider_id         TEXT,
+            reporting_period    TEXT NOT NULL,
+            numerator           INTEGER DEFAULT 0,
+            denominator         INTEGER DEFAULT 0,
+            exclusions          INTEGER DEFAULT 0,
+            performance_rate    TEXT,
+            benchmark           TEXT,
+            points_earned       TEXT DEFAULT '0',
+            status              TEXT NOT NULL DEFAULT 'in_progress' CHECK (status IN ('in_progress','calculated','submitted','accepted')),
+            calculated_at       TEXT,
+            notes               TEXT,
+            created_at          TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (measure_id) REFERENCES healthclaw_quality_measure(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_qmr_measure ON healthclaw_quality_measure_result(measure_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_qmr_period ON healthclaw_quality_measure_result(reporting_period)")
 
     # ── Register naming series for all existing companies ────────
     companies = conn.execute("SELECT id FROM company").fetchall()

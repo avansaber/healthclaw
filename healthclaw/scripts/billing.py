@@ -413,7 +413,7 @@ def add_claim(conn, args):
     claim_id = str(uuid.uuid4())
     naming = get_next_name(conn, "healthclaw_claim", company_id=args.company_id)
     now = _now_iso()
-    sql, _ = insert_row("healthclaw_claim", {"id": P(), "naming_series": P(), "patient_id": P(), "insurance_id": P(), "encounter_id": P(), "claim_date": P(), "total_charge": P(), "total_allowed": P(), "total_paid": P(), "patient_responsibility": P(), "adjustment_amount": P(), "billing_provider_id": P(), "rendering_provider_id": P(), "place_of_service": P(), "claim_type": P(), "filing_indicator": P(), "prior_auth_id": P(), "sales_invoice_id": P(), "claim_status": P(), "denial_reason": P(), "appeal_deadline": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    sql, _ = insert_row("healthclaw_claim", {"id": P(), "naming_series": P(), "patient_id": P(), "insurance_id": P(), "encounter_id": P(), "claim_date": P(), "total_charge": P(), "total_allowed": P(), "total_paid": P(), "patient_responsibility": P(), "adjustment_amount": P(), "billing_provider_id": P(), "rendering_provider_id": P(), "place_of_service": P(), "claim_type": P(), "filing_indicator": P(), "prior_auth_id": P(), "sales_invoice_id": P(), "claim_status": P(), "denial_reason": P(), "denial_category": P(), "denial_code": P(), "denial_date": P(), "appeal_deadline": P(), "appeal_submitted_date": P(), "appeal_method": P(), "appeal_reference": P(), "appeal_outcome": P(), "appeal_resolved_date": P(), "appeal_amount_recovered": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
 
     conn.execute(sql, (
         claim_id, naming, args.patient_id, insurance_id, args.encounter_id,
@@ -430,7 +430,7 @@ def add_claim(conn, args):
         prior_auth_id,
         getattr(args, "sales_invoice_id", None),
         "draft",
-        None, None,
+        None, None, None, None, None, None, None, None, None, None, None,
         getattr(args, "notes", None),
         args.company_id, now, now,
     ))
@@ -614,8 +614,293 @@ def list_claims(conn, args):
 
 
 # ---------------------------------------------------------------------------
+# H3: NPI Luhn validation helper
+# ---------------------------------------------------------------------------
+def _validate_npi(npi):
+    """Validate NPI using Luhn algorithm (10-digit)."""
+    if not npi or len(npi) != 10 or not npi.isdigit():
+        return False
+    # NPI uses prefix 80840 for Luhn check
+    prefixed = "80840" + npi
+    total = 0
+    for i, ch in enumerate(reversed(prefixed)):
+        d = int(ch)
+        if i % 2 == 1:
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+    return total % 10 == 0
+
+
+# ---------------------------------------------------------------------------
+# H3: scrub-claim (pre-submission validation)
+# ---------------------------------------------------------------------------
+def scrub_claim(conn, args):
+    claim_id = getattr(args, "claim_id", None)
+    if not claim_id:
+        err("--claim-id is required")
+
+    errors = []
+    warnings = []
+
+    # 1. Claim exists and is in 'draft' status
+    row = conn.execute(
+        Q.from_(Table("healthclaw_claim")).select(
+            Table("healthclaw_claim").star
+        ).where(Field("id") == P()).get_sql(),
+        (claim_id,)
+    ).fetchone()
+    if not row:
+        err(f"Claim {claim_id} not found")
+    claim = row_to_dict(row)
+    if claim["claim_status"] != "draft":
+        errors.append(f"Claim status is '{claim['claim_status']}', must be 'draft'")
+
+    # 2. Patient exists and has at least one active insurance
+    patient_id = claim.get("patient_id")
+    if patient_id:
+        pat = conn.execute(
+            Q.from_(Table("healthclaw_patient")).select(Field("id")).where(Field("id") == P()).get_sql(),
+            (patient_id,)
+        ).fetchone()
+        if not pat:
+            errors.append(f"Patient {patient_id} not found")
+        else:
+            ins_count = conn.execute(
+                Q.from_(Table("healthclaw_patient_insurance")).select(fn.Count("*")).where(
+                    (Field("patient_id") == P()) & (Field("status") == P())
+                ).get_sql(),
+                (patient_id, "active")
+            ).fetchone()[0]
+            if ins_count == 0:
+                errors.append("Patient has no active insurance")
+    else:
+        errors.append("Claim has no patient_id")
+
+    # 3. At least one claim line exists
+    lines = conn.execute(
+        Q.from_(Table("healthclaw_claim_line")).select(
+            Table("healthclaw_claim_line").star
+        ).where(Field("claim_id") == P()).get_sql(),
+        (claim_id,)
+    ).fetchall()
+    if len(lines) == 0:
+        errors.append("No claim lines found")
+
+    # 4. Each claim line has a CPT code (procedure_code = cpt_code)
+    for line in lines:
+        ld = row_to_dict(line)
+        if not ld.get("cpt_code"):
+            errors.append(f"Claim line {ld['id']} missing CPT code")
+
+    # 5. Each claim line has at least one diagnosis pointer (diagnosis_pointers)
+    for line in lines:
+        ld = row_to_dict(line)
+        dp = ld.get("diagnosis_pointers")
+        if not dp or dp.strip() == "":
+            errors.append(f"Claim line {ld['id']} missing diagnosis pointer")
+
+    # 6. NPI format check on rendering_provider
+    rendering_provider_id = claim.get("rendering_provider_id")
+    if rendering_provider_id:
+        npi = None
+        # Check if employee table has an npi column (SQLite treats missing columns as string literals)
+        try:
+            emp_cols = [r[1] for r in conn.execute("PRAGMA table_info(employee)").fetchall()]
+            if "npi" in emp_cols:
+                emp_row = conn.execute(
+                    Q.from_(Table("employee")).select(Field("npi")).where(Field("id") == P()).get_sql(),
+                    (rendering_provider_id,)
+                ).fetchone()
+                if emp_row and emp_row[0]:
+                    npi = emp_row[0]
+        except Exception:
+            pass
+        if npi:
+            if not _validate_npi(npi):
+                errors.append(f"Rendering provider NPI '{npi}' is invalid (Luhn check failed)")
+        else:
+            warnings.append("Rendering provider has no NPI on file")
+    else:
+        warnings.append("No rendering provider assigned to claim")
+
+    # 7. No duplicate claim (same patient + payer + service_date + procedure_code)
+    if lines:
+        insurance_id = claim.get("insurance_id")
+        for line in lines:
+            ld = row_to_dict(line)
+            cpt = ld.get("cpt_code")
+            if cpt and insurance_id:
+                # Get the charge's service_date
+                charge_row = conn.execute(
+                    Q.from_(Table("healthclaw_charge")).select(Field("service_date")).where(Field("id") == P()).get_sql(),
+                    (ld["charge_id"],)
+                ).fetchone()
+                if charge_row:
+                    svc_date = charge_row[0]
+                    # Look for another claim (not this one) with same patient + insurance + a line with same cpt + same service_date charge
+                    dup_claims = conn.execute(
+                        Q.from_(Table("healthclaw_claim")).select(Field("id")).where(
+                            (Field("patient_id") == P()) &
+                            (Field("insurance_id") == P()) &
+                            (Field("id") != P()) &
+                            (Field("claim_status") != P())
+                        ).get_sql(),
+                        (patient_id, insurance_id, claim_id, "void")
+                    ).fetchall()
+                    for dc in dup_claims:
+                        dup_line = conn.execute(
+                            Q.from_(Table("healthclaw_claim_line")).select(Field("id")).where(
+                                (Field("claim_id") == P()) & (Field("cpt_code") == P())
+                            ).get_sql(),
+                            (dc[0], cpt)
+                        ).fetchone()
+                        if dup_line:
+                            # Verify the charge service_date matches
+                            dup_charge = conn.execute(
+                                Q.from_(Table("healthclaw_claim_line")).select(Field("charge_id")).where(Field("id") == P()).get_sql(),
+                                (dup_line[0],)
+                            ).fetchone()
+                            if dup_charge:
+                                dup_svc = conn.execute(
+                                    Q.from_(Table("healthclaw_charge")).select(Field("service_date")).where(Field("id") == P()).get_sql(),
+                                    (dup_charge[0],)
+                                ).fetchone()
+                                if dup_svc and dup_svc[0] == svc_date:
+                                    warnings.append(f"Possible duplicate: claim {dc[0]} has same patient/payer/CPT {cpt}/service date {svc_date}")
+
+    # 8. Timely filing check
+    claim_date_str = claim.get("claim_date")
+    insurance_id = claim.get("insurance_id")
+    if claim_date_str and insurance_id and lines:
+        # Get the earliest service_date from claim lines' charges
+        earliest_svc = None
+        for line in lines:
+            ld = row_to_dict(line)
+            charge_row = conn.execute(
+                Q.from_(Table("healthclaw_charge")).select(Field("service_date")).where(Field("id") == P()).get_sql(),
+                (ld["charge_id"],)
+            ).fetchone()
+            if charge_row and charge_row[0]:
+                if earliest_svc is None or charge_row[0] < earliest_svc:
+                    earliest_svc = charge_row[0]
+
+        if earliest_svc:
+            # Try to find the payer's timely_filing_days via insurance -> payer
+            try:
+                ins_row = conn.execute(
+                    Q.from_(Table("healthclaw_patient_insurance")).select(Field("payer_name")).where(Field("id") == P()).get_sql(),
+                    (insurance_id,)
+                ).fetchone()
+                if ins_row and ins_row[0]:
+                    payer_row = conn.execute(
+                        Q.from_(Table("healthclaw_payer")).select(Field("timely_filing_days")).where(
+                            Field("name") == P()
+                        ).get_sql(),
+                        (ins_row[0],)
+                    ).fetchone()
+                    if payer_row and payer_row[0]:
+                        from datetime import timedelta
+                        svc_dt = datetime.strptime(earliest_svc[:10], "%Y-%m-%d")
+                        now_dt = datetime.now(timezone.utc)
+                        days_elapsed = (now_dt - svc_dt.replace(tzinfo=timezone.utc)).days
+                        if days_elapsed > int(payer_row[0]):
+                            errors.append(f"Timely filing exceeded: {days_elapsed} days since service (limit: {payer_row[0]} days)")
+                        elif days_elapsed > int(payer_row[0]) * 0.9:
+                            warnings.append(f"Timely filing warning: {days_elapsed}/{payer_row[0]} days elapsed")
+            except Exception:
+                pass  # healthclaw_payer table may not exist
+
+    passed = len(errors) == 0
+    ok({"pass": passed, "errors": errors, "warnings": warnings})
+
+
+# ---------------------------------------------------------------------------
 # 12. submit-claim
 # ---------------------------------------------------------------------------
+def _run_scrub(conn, claim_id):
+    """Run scrub checks internally (no JSON output). Returns (passed, errors, warnings)."""
+    errors = []
+    warnings = []
+
+    row = conn.execute(
+        Q.from_(Table("healthclaw_claim")).select(
+            Table("healthclaw_claim").star
+        ).where(Field("id") == P()).get_sql(),
+        (claim_id,)
+    ).fetchone()
+    if not row:
+        return False, ["Claim not found"], []
+    claim = row_to_dict(row)
+    if claim["claim_status"] != "draft":
+        errors.append(f"Claim status is '{claim['claim_status']}', must be 'draft'")
+
+    patient_id = claim.get("patient_id")
+    if patient_id:
+        pat = conn.execute(
+            Q.from_(Table("healthclaw_patient")).select(Field("id")).where(Field("id") == P()).get_sql(),
+            (patient_id,)
+        ).fetchone()
+        if not pat:
+            errors.append(f"Patient {patient_id} not found")
+        else:
+            ins_count = conn.execute(
+                Q.from_(Table("healthclaw_patient_insurance")).select(fn.Count("*")).where(
+                    (Field("patient_id") == P()) & (Field("status") == P())
+                ).get_sql(),
+                (patient_id, "active")
+            ).fetchone()[0]
+            if ins_count == 0:
+                errors.append("Patient has no active insurance")
+    else:
+        errors.append("Claim has no patient_id")
+
+    lines = conn.execute(
+        Q.from_(Table("healthclaw_claim_line")).select(
+            Table("healthclaw_claim_line").star
+        ).where(Field("claim_id") == P()).get_sql(),
+        (claim_id,)
+    ).fetchall()
+    if len(lines) == 0:
+        errors.append("No claim lines found")
+
+    for line in lines:
+        ld = row_to_dict(line)
+        if not ld.get("cpt_code"):
+            errors.append(f"Claim line {ld['id']} missing CPT code")
+
+    for line in lines:
+        ld = row_to_dict(line)
+        dp = ld.get("diagnosis_pointers")
+        if not dp or dp.strip() == "":
+            errors.append(f"Claim line {ld['id']} missing diagnosis pointer")
+
+    rendering_provider_id = claim.get("rendering_provider_id")
+    if rendering_provider_id:
+        npi = None
+        try:
+            emp_cols = [r[1] for r in conn.execute("PRAGMA table_info(employee)").fetchall()]
+            if "npi" in emp_cols:
+                emp_row = conn.execute(
+                    Q.from_(Table("employee")).select(Field("npi")).where(Field("id") == P()).get_sql(),
+                    (rendering_provider_id,)
+                ).fetchone()
+                if emp_row and emp_row[0]:
+                    npi = emp_row[0]
+        except Exception:
+            pass
+        if npi:
+            if not _validate_npi(npi):
+                errors.append(f"Rendering provider NPI '{npi}' is invalid (Luhn check failed)")
+        else:
+            warnings.append("Rendering provider has no NPI on file")
+    else:
+        warnings.append("No rendering provider assigned to claim")
+
+    return len(errors) == 0, errors, warnings
+
+
 def submit_claim(conn, args):
     claim_id = getattr(args, "claim_id", None)
     if not claim_id:
@@ -625,6 +910,11 @@ def submit_claim(conn, args):
         err(f"Claim {claim_id} not found")
     if row[0] != "draft":
         err(f"Cannot submit claim with status '{row[0]}'. Must be 'draft'.")
+
+    # Run scrub checks before submission
+    passed, scrub_errors, scrub_warnings = _run_scrub(conn, claim_id)
+    if not passed:
+        err(f"Claim scrub failed: {'; '.join(scrub_errors)}")
 
     # Verify at least one claim line exists
     line_count = conn.execute(Q.from_(Table("healthclaw_claim_line")).select(fn.Count("*")).where(Field("claim_id") == P()).get_sql(), (claim_id,)).fetchone()[0]
@@ -637,7 +927,7 @@ def submit_claim(conn, args):
     conn.execute(sql, (claim_id,))
     audit(conn, "healthclaw_claim", claim_id, "health-submit-claim", None)
     conn.commit()
-    ok({"id": claim_id, "claim_status": "submitted", "line_count": line_count})
+    ok({"id": claim_id, "claim_status": "submitted", "line_count": line_count, "scrub_warnings": scrub_warnings})
 
 
 # ---------------------------------------------------------------------------
@@ -840,6 +1130,299 @@ def list_payment_postings(conn, args):
 
 
 # ---------------------------------------------------------------------------
+# H5: Denial Management
+# ---------------------------------------------------------------------------
+VALID_DENIAL_CATEGORIES = ("CO", "PR", "OA", "PI")
+VALID_APPEAL_METHODS = ("written", "phone", "online")
+VALID_APPEAL_OUTCOMES = ("pending", "overturned", "upheld", "partial")
+
+
+def record_denial(conn, args):
+    claim_id = getattr(args, "claim_id", None)
+    if not claim_id:
+        err("--claim-id is required")
+    row = conn.execute(
+        Q.from_(Table("healthclaw_claim")).select(Field("claim_status")).where(Field("id") == P()).get_sql(),
+        (claim_id,)
+    ).fetchone()
+    if not row:
+        err(f"Claim {claim_id} not found")
+
+    denial_category = getattr(args, "denial_category", None)
+    if not denial_category:
+        err("--denial-category is required")
+    _validate_enum(denial_category, VALID_DENIAL_CATEGORIES, "denial-category")
+
+    denial_code = getattr(args, "denial_code", None)
+    if not denial_code:
+        err("--denial-code is required")
+
+    denial_reason = getattr(args, "denial_reason", None)
+    denial_date = getattr(args, "denial_date", None) or _now_iso()[:10]
+
+    data = {
+        "claim_status": "denied",
+        "denial_category": denial_category,
+        "denial_code": denial_code,
+        "denial_date": denial_date,
+        "updated_at": LiteralValue("datetime('now')"),
+    }
+    if denial_reason:
+        data["denial_reason"] = denial_reason
+
+    sql, params = dynamic_update("healthclaw_claim", data, {"id": claim_id})
+    conn.execute(sql, params)
+    audit(conn, "healthclaw_claim", claim_id, "health-record-denial", None,
+          {"denial_category": denial_category, "denial_code": denial_code})
+    conn.commit()
+    ok({"id": claim_id, "claim_status": "denied", "denial_category": denial_category,
+        "denial_code": denial_code, "denial_date": denial_date})
+
+
+def submit_appeal(conn, args):
+    claim_id = getattr(args, "claim_id", None)
+    if not claim_id:
+        err("--claim-id is required")
+    row = conn.execute(
+        Q.from_(Table("healthclaw_claim")).select(Field("claim_status")).where(Field("id") == P()).get_sql(),
+        (claim_id,)
+    ).fetchone()
+    if not row:
+        err(f"Claim {claim_id} not found")
+    if row[0] != "denied":
+        err(f"Cannot appeal claim with status '{row[0]}'. Must be 'denied'.")
+
+    appeal_method = getattr(args, "appeal_method", None)
+    if appeal_method:
+        _validate_enum(appeal_method, VALID_APPEAL_METHODS, "appeal-method")
+
+    appeal_reference = getattr(args, "appeal_reference", None)
+    notes = getattr(args, "notes", None)
+    now = _now_iso()
+
+    data = {
+        "claim_status": "appealed",
+        "appeal_submitted_date": now[:10],
+        "appeal_outcome": "pending",
+        "updated_at": LiteralValue("datetime('now')"),
+    }
+    if appeal_method:
+        data["appeal_method"] = appeal_method
+    if appeal_reference:
+        data["appeal_reference"] = appeal_reference
+    if notes:
+        data["notes"] = notes
+
+    sql, params = dynamic_update("healthclaw_claim", data, {"id": claim_id})
+    conn.execute(sql, params)
+    audit(conn, "healthclaw_claim", claim_id, "health-submit-appeal", None)
+    conn.commit()
+    ok({"id": claim_id, "claim_status": "appealed", "appeal_submitted_date": now[:10]})
+
+
+def resolve_appeal(conn, args):
+    claim_id = getattr(args, "claim_id", None)
+    if not claim_id:
+        err("--claim-id is required")
+    row = conn.execute(
+        Q.from_(Table("healthclaw_claim")).select(Field("claim_status"), Field("appeal_outcome")).where(Field("id") == P()).get_sql(),
+        (claim_id,)
+    ).fetchone()
+    if not row:
+        err(f"Claim {claim_id} not found")
+    if row[0] != "appealed":
+        err(f"Cannot resolve appeal for claim with status '{row[0]}'. Must be 'appealed'.")
+
+    appeal_outcome = getattr(args, "appeal_outcome", None)
+    if not appeal_outcome:
+        err("--appeal-outcome is required")
+    _validate_enum(appeal_outcome, ("overturned", "upheld", "partial"), "appeal-outcome")
+
+    appeal_amount_recovered = getattr(args, "appeal_amount_recovered", None)
+    now = _now_iso()
+
+    # Determine new claim status based on outcome
+    if appeal_outcome == "overturned":
+        new_status = "accepted"
+    elif appeal_outcome == "upheld":
+        new_status = "denied"
+    else:  # partial
+        new_status = "partially_paid"
+
+    data = {
+        "claim_status": new_status,
+        "appeal_outcome": appeal_outcome,
+        "appeal_resolved_date": now[:10],
+        "updated_at": LiteralValue("datetime('now')"),
+    }
+    if appeal_amount_recovered:
+        data["appeal_amount_recovered"] = str(round_currency(to_decimal(appeal_amount_recovered)))
+
+    sql, params = dynamic_update("healthclaw_claim", data, {"id": claim_id})
+    conn.execute(sql, params)
+    audit(conn, "healthclaw_claim", claim_id, "health-resolve-appeal", None,
+          {"appeal_outcome": appeal_outcome})
+    conn.commit()
+    ok({"id": claim_id, "claim_status": new_status, "appeal_outcome": appeal_outcome,
+        "appeal_resolved_date": now[:10]})
+
+
+def list_denied_claims(conn, args):
+    _validate_company(conn, args.company_id)
+
+    t = Table("healthclaw_claim")
+    ins = Table("healthclaw_patient_insurance")
+
+    q_count = Q.from_(t).select(fn.Count("*")).where(
+        (t.company_id == P()) & (t.claim_status == P())
+    )
+    q_rows = Q.from_(t).left_join(ins).on(t.insurance_id == ins.id).select(
+        t.star, ins.payer_name.as_("insurance_payer_name")
+    ).where(
+        (t.company_id == P()) & (t.claim_status == P())
+    )
+    params = [args.company_id, "denied"]
+
+    payer_name = getattr(args, "payer_name", None)
+    if payer_name:
+        q_count = q_count.where(ins.payer_name == P())
+        # Need to add join for count too
+        q_count = Q.from_(t).left_join(ins).on(t.insurance_id == ins.id).select(fn.Count("*")).where(
+            (t.company_id == P()) & (t.claim_status == P()) & (ins.payer_name == P())
+        )
+        params = [args.company_id, "denied", payer_name]
+
+    denial_category = getattr(args, "denial_category", None)
+    if denial_category:
+        q_count = q_count.where(t.denial_category == P())
+        q_rows = q_rows.where(t.denial_category == P())
+        params.append(denial_category)
+
+    date_from = getattr(args, "date_from", None)
+    if date_from:
+        q_count = q_count.where(t.denial_date >= P())
+        q_rows = q_rows.where(t.denial_date >= P())
+        params.append(date_from)
+
+    date_to = getattr(args, "date_to", None)
+    if date_to:
+        q_count = q_count.where(t.denial_date <= P())
+        q_rows = q_rows.where(t.denial_date <= P())
+        params.append(date_to)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+
+    limit = getattr(args, "limit", 50) or 50
+    offset = getattr(args, "offset", 0) or 0
+    q_rows = q_rows.orderby(t.denial_date, order=Order.desc).limit(P()).offset(P())
+
+    rows = conn.execute(q_rows.get_sql(), params + [limit, offset]).fetchall()
+    ok({
+        "rows": [row_to_dict(r) for r in rows],
+        "total_count": total, "limit": limit, "offset": offset,
+        "has_more": (offset + limit) < total,
+    })
+
+
+def denial_trend_report(conn, args):
+    _validate_company(conn, args.company_id)
+
+    months = int(getattr(args, "months", None) or 6)
+
+    # Calculate cutoff date
+    now_dt = datetime.now(timezone.utc)
+    cutoff_year = now_dt.year
+    cutoff_month = now_dt.month - months
+    while cutoff_month <= 0:
+        cutoff_month += 12
+        cutoff_year -= 1
+    cutoff_date = f"{cutoff_year:04d}-{cutoff_month:02d}-01"
+
+    t = Table("healthclaw_claim")
+    ins = Table("healthclaw_patient_insurance")
+
+    rows = conn.execute(
+        Q.from_(t).left_join(ins).on(t.insurance_id == ins.id).select(
+            ins.payer_name, t.denial_code, t.denial_category, t.total_charge
+        ).where(
+            (t.company_id == P()) &
+            (t.claim_status == P()) &
+            (t.denial_date >= P())
+        ).get_sql(),
+        (args.company_id, "denied", cutoff_date)
+    ).fetchall()
+
+    # Group by payer + denial_code
+    trends = {}
+    for r in rows:
+        payer = r[0] or "Unknown"
+        code = r[1] or "Unknown"
+        cat = r[2] or "Unknown"
+        amount = to_decimal(r[3] or "0")
+        key = f"{payer}|{code}"
+        if key not in trends:
+            trends[key] = {"payer_name": payer, "denial_code": code, "denial_category": cat, "count": 0, "total_amount": Decimal("0")}
+        trends[key]["count"] += 1
+        trends[key]["total_amount"] += amount
+
+    result = sorted(trends.values(), key=lambda x: x["count"], reverse=True)
+    for r in result:
+        r["total_amount"] = str(round_currency(r["total_amount"]))
+
+    ok({"report": "denial_trend", "months": months, "cutoff_date": cutoff_date,
+        "trends": result, "total_denials": len(rows)})
+
+
+def appeal_success_rate_report(conn, args):
+    _validate_company(conn, args.company_id)
+
+    t = Table("healthclaw_claim")
+
+    # Count appeals submitted (claims that have appeal_submitted_date)
+    appeals_submitted = conn.execute(
+        Q.from_(t).select(fn.Count("*")).where(
+            (t.company_id == P()) & (t.appeal_submitted_date.isnotnull())
+        ).get_sql(),
+        (args.company_id,)
+    ).fetchone()[0]
+
+    # Count by outcome
+    outcomes = {}
+    for outcome in ("overturned", "upheld", "partial", "pending"):
+        count = conn.execute(
+            Q.from_(t).select(fn.Count("*")).where(
+                (t.company_id == P()) & (t.appeal_outcome == P())
+            ).get_sql(),
+            (args.company_id, outcome)
+        ).fetchone()[0]
+        outcomes[outcome] = count
+
+    # Calculate amounts recovered
+    recovered_rows = conn.execute(
+        Q.from_(t).select(t.appeal_amount_recovered).where(
+            (t.company_id == P()) & (t.appeal_amount_recovered.isnotnull())
+        ).get_sql(),
+        (args.company_id,)
+    ).fetchall()
+    total_recovered = sum((to_decimal(r[0]) for r in recovered_rows if r[0]), Decimal("0"))
+
+    resolved = outcomes["overturned"] + outcomes["upheld"] + outcomes["partial"]
+    success_rate = "0.00"
+    if resolved > 0:
+        rate = Decimal(str(outcomes["overturned"] + outcomes["partial"])) / Decimal(str(resolved)) * Decimal("100")
+        success_rate = str(rate.quantize(Decimal("0.01")))
+
+    ok({
+        "report": "appeal_success_rate",
+        "appeals_submitted": appeals_submitted,
+        "outcomes": outcomes,
+        "resolved": resolved,
+        "success_rate_pct": success_rate,
+        "total_amount_recovered": str(round_currency(total_recovered)),
+    })
+
+
+# ---------------------------------------------------------------------------
 # Action Router
 # ---------------------------------------------------------------------------
 ACTIONS = {
@@ -854,9 +1437,16 @@ ACTIONS = {
     "health-update-claim": update_claim,
     "health-get-claim": get_claim,
     "health-list-claims": list_claims,
+    "health-scrub-claim": scrub_claim,
     "health-submit-claim": submit_claim,
     "health-add-claim-line": add_claim_line,
     "health-list-claim-lines": list_claim_lines,
     "health-add-payment-posting": add_payment_posting,
     "health-list-payment-postings": list_payment_postings,
+    "health-record-denial": record_denial,
+    "health-submit-appeal": submit_appeal,
+    "health-resolve-appeal": resolve_appeal,
+    "health-list-denied-claims": list_denied_claims,
+    "health-denial-trend-report": denial_trend_report,
+    "health-appeal-success-rate-report": appeal_success_rate_report,
 }
