@@ -647,6 +647,519 @@ def add_order(conn, args):
     ok({"id": order_id, "naming_series": naming, "order_type": order_type, "status": "pending"})
 
 
+# ===========================================================================
+# H14: Problem List (alias to medical_history)
+# ===========================================================================
+
+def add_problem(conn, args):
+    """Alias for health-add-medical-history (problem list entry)."""
+    # Import at call time to avoid circular imports
+    from patients import add_medical_history
+    add_medical_history(conn, args)
+
+
+def list_active_problems(conn, args):
+    """List active/chronic problems from medical_history table."""
+    t = Table("healthclaw_medical_history")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
+    patient_id = getattr(args, "patient_id", None)
+    if not patient_id:
+        err("--patient-id is required")
+    _validate_patient(conn, patient_id)
+
+    q_count = q_count.where(t.patient_id == P())
+    q_rows = q_rows.where(t.patient_id == P())
+    params.append(patient_id)
+
+    # Filter to active or chronic problems only
+    q_count = q_count.where(t.status.isin([P(), P()]))
+    q_rows = q_rows.where(t.status.isin([P(), P()]))
+    params.extend(["active", "chronic"])
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.created_at, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
+    ok({"rows": [row_to_dict(r) for r in rows], "total_count": total, "limit": args.limit, "offset": args.offset, "has_more": (args.offset + args.limit) < total})
+
+
+# ===========================================================================
+# H15: Medication Reconciliation
+# ===========================================================================
+
+VALID_RECON_TYPES = ("admission", "discharge", "transfer", "annual_review")
+VALID_RECON_STATUSES = ("pending", "completed", "reviewed")
+
+
+def add_med_reconciliation(conn, args):
+    """Create a medication reconciliation record."""
+    if not args.company_id:
+        err("--company-id is required")
+    _validate_patient(conn, args.patient_id)
+
+    recon_type = getattr(args, "reconciliation_type", None)
+    if not recon_type:
+        err("--reconciliation-type is required")
+    _validate_enum(recon_type, VALID_RECON_TYPES, "reconciliation-type")
+
+    enc_id = getattr(args, "encounter_id", None)
+    if enc_id:
+        _validate_encounter(conn, enc_id)
+
+    rec_id = str(uuid.uuid4())
+    now = _now_iso()
+    sql, _ = insert_row("healthclaw_med_reconciliation", {
+        "id": P(), "patient_id": P(), "encounter_id": P(),
+        "reconciliation_type": P(), "medications_reviewed": P(),
+        "medications_added": P(), "medications_removed": P(),
+        "medications_changed": P(), "reconciled_by": P(),
+        "reconciled_at": P(), "notes": P(), "status": P(),
+        "company_id": P(), "created_at": P(),
+    })
+    conn.execute(sql, (
+        rec_id, args.patient_id, enc_id, recon_type,
+        getattr(args, "medications_reviewed", None),
+        getattr(args, "medications_added", None),
+        getattr(args, "medications_removed", None),
+        getattr(args, "medications_changed", None),
+        getattr(args, "reconciled_by", None),
+        now if getattr(args, "reconciled_by", None) else None,
+        getattr(args, "notes", None),
+        "pending", args.company_id, now,
+    ))
+    audit(conn, "healthclaw_med_reconciliation", rec_id, "health-add-med-reconciliation", args.company_id)
+    conn.commit()
+    ok({"id": rec_id, "reconciliation_type": recon_type, "recon_status": "pending"})
+
+
+def list_med_reconciliations(conn, args):
+    """List medication reconciliation records."""
+    t = Table("healthclaw_med_reconciliation")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
+    if getattr(args, "patient_id", None):
+        q_count = q_count.where(t.patient_id == P()); q_rows = q_rows.where(t.patient_id == P()); params.append(args.patient_id)
+    if getattr(args, "company_id", None):
+        q_count = q_count.where(t.company_id == P()); q_rows = q_rows.where(t.company_id == P()); params.append(args.company_id)
+    if getattr(args, "status", None):
+        q_count = q_count.where(t.status == P()); q_rows = q_rows.where(t.status == P()); params.append(args.status)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.created_at, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
+    ok({"rows": [row_to_dict(r) for r in rows], "total_count": total, "limit": args.limit, "offset": args.offset, "has_more": (args.offset + args.limit) < total})
+
+
+def get_med_reconciliation(conn, args):
+    """Get a single medication reconciliation record."""
+    rec_id = getattr(args, "reconciliation_id", None)
+    if not rec_id:
+        err("--reconciliation-id is required")
+    t = Table("healthclaw_med_reconciliation")
+    row = conn.execute(Q.from_(t).select(t.star).where(t.id == P()).get_sql(), (rec_id,)).fetchone()
+    if not row:
+        err(f"Medication reconciliation {rec_id} not found")
+    ok(row_to_dict(row))
+
+
+# ===========================================================================
+# H16: Immunization Registry
+# ===========================================================================
+
+def add_immunization(conn, args):
+    """Record a vaccination."""
+    if not args.company_id:
+        err("--company-id is required")
+    _validate_patient(conn, args.patient_id)
+
+    vaccine_name = getattr(args, "vaccine_name", None)
+    if not vaccine_name:
+        err("--vaccine-name is required")
+    admin_date = getattr(args, "administration_date", None)
+    if not admin_date:
+        err("--administration-date is required")
+
+    imm_id = str(uuid.uuid4())
+    now = _now_iso()
+    sql, _ = insert_row("healthclaw_immunization", {
+        "id": P(), "patient_id": P(), "vaccine_name": P(),
+        "vaccine_code": P(), "lot_number": P(), "manufacturer": P(),
+        "administration_date": P(), "administration_site": P(),
+        "administered_by": P(), "dose_number": P(),
+        "series_complete": P(), "vis_date": P(),
+        "next_due_date": P(), "reaction_notes": P(),
+        "company_id": P(), "created_at": P(),
+    })
+    conn.execute(sql, (
+        imm_id, args.patient_id, vaccine_name,
+        getattr(args, "vaccine_code", None),
+        getattr(args, "lot_number", None),
+        getattr(args, "manufacturer", None),
+        admin_date,
+        getattr(args, "administration_site", None),
+        getattr(args, "administered_by", None),
+        int(getattr(args, "dose_number", None) or 1),
+        1 if getattr(args, "series_complete", None) == "1" else 0,
+        getattr(args, "vis_date", None),
+        getattr(args, "next_due_date", None),
+        getattr(args, "reaction_notes", None),
+        args.company_id, now,
+    ))
+    audit(conn, "healthclaw_immunization", imm_id, "health-add-immunization", args.company_id)
+    conn.commit()
+    ok({"id": imm_id, "vaccine_name": vaccine_name, "administration_date": admin_date})
+
+
+def update_immunization(conn, args):
+    """Update an immunization record."""
+    imm_id = getattr(args, "immunization_id", None)
+    if not imm_id:
+        err("--immunization-id is required")
+    t = Table("healthclaw_immunization")
+    if not conn.execute(Q.from_(t).select(Field("id")).where(Field("id") == P()).get_sql(), (imm_id,)).fetchone():
+        err(f"Immunization {imm_id} not found")
+
+    data, changed = {}, []
+    for arg_name, col_name in {
+        "vaccine_name": "vaccine_name", "vaccine_code": "vaccine_code",
+        "lot_number": "lot_number", "manufacturer": "manufacturer",
+        "administration_date": "administration_date", "administration_site": "administration_site",
+        "administered_by": "administered_by", "vis_date": "vis_date",
+        "next_due_date": "next_due_date", "reaction_notes": "reaction_notes",
+    }.items():
+        val = getattr(args, arg_name, None)
+        if val is not None:
+            data[col_name] = val; changed.append(col_name)
+
+    dose = getattr(args, "dose_number", None)
+    if dose is not None:
+        data["dose_number"] = int(dose); changed.append("dose_number")
+    series = getattr(args, "series_complete", None)
+    if series is not None:
+        data["series_complete"] = 1 if series == "1" else 0; changed.append("series_complete")
+
+    if not data:
+        err("No fields to update")
+    sql, params = dynamic_update("healthclaw_immunization", data, {"id": imm_id})
+    conn.execute(sql, params)
+    audit(conn, "healthclaw_immunization", imm_id, "health-update-immunization", None)
+    conn.commit()
+    ok({"id": imm_id, "updated_fields": changed})
+
+
+def list_immunizations(conn, args):
+    """List immunization records for a patient."""
+    t = Table("healthclaw_immunization")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
+    if getattr(args, "patient_id", None):
+        q_count = q_count.where(t.patient_id == P()); q_rows = q_rows.where(t.patient_id == P()); params.append(args.patient_id)
+    if getattr(args, "company_id", None):
+        q_count = q_count.where(t.company_id == P()); q_rows = q_rows.where(t.company_id == P()); params.append(args.company_id)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.administration_date, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
+    ok({"rows": [row_to_dict(r) for r in rows], "total_count": total, "limit": args.limit, "offset": args.offset, "has_more": (args.offset + args.limit) < total})
+
+
+def get_immunization_record(conn, args):
+    """Get a single immunization record."""
+    imm_id = getattr(args, "immunization_id", None)
+    if not imm_id:
+        err("--immunization-id is required")
+    t = Table("healthclaw_immunization")
+    row = conn.execute(Q.from_(t).select(t.star).where(t.id == P()).get_sql(), (imm_id,)).fetchone()
+    if not row:
+        err(f"Immunization {imm_id} not found")
+    ok(row_to_dict(row))
+
+
+def immunizations_due_report(conn, args):
+    """Report immunizations due for all patients or a specific patient."""
+    if not args.company_id:
+        err("--company-id is required")
+
+    t = Table("healthclaw_immunization")
+    q = Q.from_(t).select(t.star).where(t.company_id == P()).where(t.next_due_date.isnotnull())
+    params = [args.company_id]
+
+    if getattr(args, "patient_id", None):
+        q = q.where(t.patient_id == P())
+        params.append(args.patient_id)
+
+    # Only show where next_due_date is in the future or past (overdue)
+    q = q.orderby(t.next_due_date, order=Order.asc).limit(P()).offset(P())
+    rows = conn.execute(q.get_sql(), params + [args.limit, args.offset]).fetchall()
+
+    results = []
+    for r in rows:
+        data = row_to_dict(r)
+        results.append({
+            "patient_id": data["patient_id"],
+            "vaccine_name": data["vaccine_name"],
+            "last_dose_date": data["administration_date"],
+            "next_due_date": data["next_due_date"],
+            "dose_number": data.get("dose_number"),
+            "series_complete": data.get("series_complete", 0),
+        })
+
+    ok({"company_id": args.company_id, "immunizations_due": results, "count": len(results)})
+
+
+# ===========================================================================
+# H17: Care Team (Phase 11)
+# ===========================================================================
+
+VALID_CARE_TEAM_ROLES = ("pcp", "specialist", "care_coordinator", "nurse",
+                         "therapist", "social_worker", "pharmacist", "other")
+
+
+def add_care_team_member(conn, args):
+    _validate_patient(conn, args.patient_id)
+    _validate_provider(conn, args.provider_id)
+    if not args.company_id:
+        err("--company-id is required")
+    role = getattr(args, "role", None)
+    if not role:
+        err("--role is required")
+    _validate_enum(role, VALID_CARE_TEAM_ROLES, "role")
+
+    ct_id = str(uuid.uuid4())
+    now = _now_iso()
+    sql, _ = insert_row("healthclaw_care_team", {
+        "id": P(), "patient_id": P(), "provider_id": P(),
+        "role": P(), "start_date": P(), "end_date": P(),
+        "status": P(), "company_id": P(), "created_at": P(),
+    })
+    conn.execute(sql, (
+        ct_id, args.patient_id, args.provider_id, role,
+        getattr(args, "start_date", None) or now[:10],
+        None, "active", args.company_id, now,
+    ))
+    audit(conn, "healthclaw_care_team", ct_id, "health-add-care-team-member", args.company_id)
+    conn.commit()
+    ok({"id": ct_id, "patient_id": args.patient_id,
+        "provider_id": args.provider_id, "role": role, "care_team_status": "active"})
+
+
+def list_care_team(conn, args):
+    _validate_patient(conn, args.patient_id)
+    t = Table("healthclaw_care_team")
+    q_count = Q.from_(t).select(fn.Count("*")).where(t.patient_id == P())
+    q_rows = Q.from_(t).select(t.star).where(t.patient_id == P())
+    params = [args.patient_id]
+    status = getattr(args, "status", None)
+    if status:
+        q_count = q_count.where(t.status == P())
+        q_rows = q_rows.where(t.status == P())
+        params.append(status)
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.role, order=Order.asc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
+    enriched = []
+    for r in rows:
+        d = row_to_dict(r)
+        prov = conn.execute(Q.from_(Table("employee")).select(Field("full_name")).where(Field("id") == P()).get_sql(), (d["provider_id"],)).fetchone()
+        if prov:
+            d["provider_name"] = prov[0]
+        enriched.append(d)
+    ok({"rows": enriched, "total_count": total, "limit": args.limit,
+        "offset": args.offset, "has_more": (args.offset + args.limit) < total})
+
+
+def remove_care_team_member(conn, args):
+    ct_id = getattr(args, "care_team_id", None)
+    if not ct_id:
+        err("--care-team-id is required")
+    t = Table("healthclaw_care_team")
+    row = conn.execute(Q.from_(t).select(t.status).where(t.id == P()).get_sql(), (ct_id,)).fetchone()
+    if not row:
+        err(f"Care team member {ct_id} not found")
+    if row[0] == "inactive":
+        err("Care team member is already inactive")
+    now = _now_iso()
+    data = {"status": "inactive", "end_date": now[:10]}
+    sql, params = dynamic_update("healthclaw_care_team", data, {"id": ct_id})
+    conn.execute(sql, params)
+    audit(conn, "healthclaw_care_team", ct_id, "health-remove-care-team-member", None)
+    conn.commit()
+    ok({"id": ct_id, "care_team_status": "inactive", "end_date": now[:10]})
+
+
+# ===========================================================================
+# H18: Patient Education (Phase 11)
+# ===========================================================================
+
+VALID_EDUCATION_TYPES = ("discharge_instructions", "disease_management", "medication_guide",
+                         "preventive_care", "surgical_prep", "post_operative", "lifestyle", "other")
+
+
+def add_patient_education(conn, args):
+    """Record patient education as a clinical note with education_type metadata."""
+    enc_id = getattr(args, "encounter_id", None)
+    _validate_encounter(conn, enc_id)
+    _validate_patient(conn, args.patient_id)
+    author_id = getattr(args, "author_id", None) or getattr(args, "provider_id", None)
+    if not author_id:
+        err("--author-id or --provider-id is required")
+    education_type = getattr(args, "education_type", None) or "other"
+    _validate_enum(education_type, VALID_EDUCATION_TYPES, "education-type")
+    body = getattr(args, "body", None)
+    if not body:
+        err("--body is required (education content)")
+
+    note_id = str(uuid.uuid4())
+    now = _now_iso()
+    import json as _json
+    education_meta = _json.dumps({"education_type": education_type, "is_education": True})
+    sql, _ = insert_row("healthclaw_clinical_note", {
+        "id": P(), "encounter_id": P(), "patient_id": P(),
+        "author_id": P(), "note_type": P(), "subjective": P(),
+        "objective": P(), "assessment": P(), "plan": P(),
+        "body": P(), "addendum": P(), "signed_at": P(),
+        "cosigner_id": P(), "cosigned_at": P(),
+        "status": P(), "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(sql, (
+        note_id, enc_id, args.patient_id, author_id, "other",
+        None, None, education_meta, None, body, None, None, None, None,
+        "signed", now, now,
+    ))
+    audit(conn, "healthclaw_clinical_note", note_id, "health-add-patient-education", None)
+    conn.commit()
+    ok({"id": note_id, "education_type": education_type,
+        "encounter_id": enc_id, "patient_id": args.patient_id, "note_status": "signed"})
+
+
+def list_patient_education(conn, args):
+    """List patient education records (clinical notes with education metadata)."""
+    _validate_patient(conn, args.patient_id)
+    t = Table("healthclaw_clinical_note")
+    q_rows = Q.from_(t).select(t.star).where((t.patient_id == P()) & (t.note_type == P()))
+    params = [args.patient_id, "other"]
+    rows = conn.execute(
+        q_rows.orderby(t.created_at, order=Order.desc).limit(P()).offset(P()).get_sql(),
+        params + [args.limit, args.offset]
+    ).fetchall()
+    import json as _json
+    education_notes = []
+    for r in rows:
+        d = row_to_dict(r)
+        try:
+            meta = _json.loads(d.get("assessment", "{}"))
+            if meta.get("is_education"):
+                d["education_type"] = meta.get("education_type", "other")
+                education_notes.append(d)
+        except (_json.JSONDecodeError, TypeError):
+            pass
+    ok({"rows": education_notes, "total_count": len(education_notes),
+        "limit": args.limit, "offset": args.offset, "has_more": False})
+
+
+# ===========================================================================
+# H23: Recurring Appointments (Phase 11)
+# ===========================================================================
+
+def create_recurring_appointment(conn, args):
+    """Create N appointments at specified interval."""
+    if not args.company_id:
+        err("--company-id is required")
+    _validate_patient(conn, args.patient_id)
+    _validate_provider(conn, args.provider_id)
+    appt_date = getattr(args, "appointment_date", None)
+    if not appt_date:
+        err("--appointment-date is required (first appointment date)")
+    start_time = getattr(args, "start_time", None)
+    end_time = getattr(args, "end_time", None)
+    if not start_time or not end_time:
+        err("--start-time and --end-time are required")
+
+    count = int(getattr(args, "recurrence_count", None) or 4)
+    if count < 1 or count > 52:
+        err("--recurrence-count must be 1-52")
+    interval_days = int(getattr(args, "interval_days", None) or 7)
+    if interval_days < 1:
+        err("--interval-days must be >= 1")
+    appt_type = getattr(args, "appointment_type", None) or "follow_up"
+    series_id = str(uuid.uuid4())
+    created_ids = []
+
+    from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
+    ENTITY_PREFIXES.setdefault("healthclaw_appointment", "APPT-")
+    from datetime import timedelta
+    import json as _json
+    current_date = datetime.strptime(appt_date[:10], "%Y-%m-%d")
+    now = _now_iso()
+
+    for i in range(count):
+        appt_date_str = current_date.strftime("%Y-%m-%d")
+        appt_id = str(uuid.uuid4())
+        naming = get_next_name(conn, "healthclaw_appointment", company_id=args.company_id)
+        sql, _ = insert_row("healthclaw_appointment", {
+            "id": P(), "naming_series": P(), "patient_id": P(),
+            "provider_id": P(), "appointment_date": P(), "start_time": P(),
+            "end_time": P(), "duration_minutes": P(), "appointment_type": P(),
+            "chief_complaint": P(), "location": P(), "status": P(),
+            "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P(),
+        })
+        conn.execute(sql, (
+            appt_id, naming, args.patient_id, args.provider_id,
+            appt_date_str, start_time, end_time,
+            int(getattr(args, "duration_minutes", None) or 30), appt_type,
+            getattr(args, "chief_complaint", None), getattr(args, "location", None),
+            "scheduled",
+            _json.dumps({"series_id": series_id, "occurrence": i + 1, "total": count}),
+            args.company_id, now, now,
+        ))
+        created_ids.append(appt_id)
+        current_date += timedelta(days=interval_days)
+
+    audit(conn, "healthclaw_appointment", series_id, "health-create-recurring-appointment",
+          args.company_id, {"count": count, "interval_days": interval_days})
+    conn.commit()
+    last_date = (datetime.strptime(appt_date[:10], "%Y-%m-%d") + timedelta(days=interval_days * (count - 1))).strftime("%Y-%m-%d")
+    ok({"series_id": series_id, "appointment_count": len(created_ids),
+        "appointment_ids": created_ids, "interval_days": interval_days,
+        "first_date": appt_date[:10], "last_date": last_date})
+
+
+def list_recurring_series(conn, args):
+    """List appointments belonging to a recurring series."""
+    _validate_patient(conn, args.patient_id)
+    t = Table("healthclaw_appointment")
+    rows = conn.execute(
+        Q.from_(t).select(t.star).where(t.patient_id == P())
+        .orderby(t.appointment_date, order=Order.asc)
+        .limit(P()).offset(P()).get_sql(),
+        (args.patient_id, args.limit, args.offset)
+    ).fetchall()
+    import json as _json
+    series_map = {}
+    for r in rows:
+        d = row_to_dict(r)
+        try:
+            meta = _json.loads(d.get("notes", "{}"))
+            sid = meta.get("series_id")
+            if sid:
+                if sid not in series_map:
+                    series_map[sid] = {"series_id": sid, "total_in_series": meta.get("total", 0), "appointments": []}
+                series_map[sid]["appointments"].append({
+                    "id": d["id"], "appointment_date": d["appointment_date"],
+                    "status": d["status"], "occurrence": meta.get("occurrence", 0),
+                })
+        except (_json.JSONDecodeError, TypeError):
+            pass
+    ok({"patient_id": args.patient_id, "series_count": len(series_map),
+        "series": list(series_map.values())})
+
+
 # ---------------------------------------------------------------------------
 # Action Router
 # ---------------------------------------------------------------------------
@@ -669,4 +1182,27 @@ ACTIONS = {
     "health-update-clinical-note": update_clinical_note,
     "health-list-clinical-notes": list_clinical_notes,
     "health-add-order": add_order,
+    # H14: Problem List (aliases)
+    "health-add-problem": add_problem,
+    "health-list-active-problems": list_active_problems,
+    # H15: Medication Reconciliation
+    "health-add-med-reconciliation": add_med_reconciliation,
+    "health-list-med-reconciliations": list_med_reconciliations,
+    "health-get-med-reconciliation": get_med_reconciliation,
+    # H16: Immunization Registry
+    "health-add-immunization": add_immunization,
+    "health-update-immunization": update_immunization,
+    "health-list-immunizations": list_immunizations,
+    "health-get-immunization-record": get_immunization_record,
+    "health-immunizations-due-report": immunizations_due_report,
+    # H17: Care Team (Phase 11)
+    "health-add-care-team-member": add_care_team_member,
+    "health-list-care-team": list_care_team,
+    "health-remove-care-team-member": remove_care_team_member,
+    # H18: Patient Education (Phase 11)
+    "health-add-patient-education": add_patient_education,
+    "health-list-patient-education": list_patient_education,
+    # H23: Recurring Appointments (Phase 11)
+    "health-create-recurring-appointment": create_recurring_appointment,
+    "health-list-recurring-series": list_recurring_series,
 }

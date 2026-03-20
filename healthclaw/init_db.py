@@ -2,9 +2,10 @@
 """HealthClaw schema extension — adds domain tables to the shared database.
 
 AI-native hospital and multi-department healthcare ERP.
-40 tables across 11 domains:
+52 tables across 11 domains + Phase 11:
   Core (35 tables, 7 domains): patients, appointments, clinical, billing, inventory, lab, referrals
   Advanced (5 tables, 2 domains): pharmacy, controlled substances
+  Phase 8 Clinical Depth (5 tables): med_reconciliation, immunization, provider_credential, payer_enrollment, (reminder already exists)
 
 Prerequisite: ERPClaw init_db.py must have run first (creates foundation tables).
 Run: python3 init_db.py [db_path]
@@ -1527,6 +1528,265 @@ def create_healthclaw_tables(db_path):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_qmr_measure ON healthclaw_quality_measure_result(measure_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_qmr_period ON healthclaw_quality_measure_result(reporting_period)")
 
+    # ==========================================================
+    # Phase 8: Clinical Depth tables (5 new tables)
+    # ==========================================================
+
+    # -- healthclaw_med_reconciliation (H15) --
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS healthclaw_med_reconciliation (
+            id                    TEXT PRIMARY KEY,
+            patient_id            TEXT NOT NULL,
+            encounter_id          TEXT,
+            reconciliation_type   TEXT NOT NULL CHECK(reconciliation_type IN ('admission','discharge','transfer','annual_review')),
+            medications_reviewed  TEXT,
+            medications_added     TEXT,
+            medications_removed   TEXT,
+            medications_changed   TEXT,
+            reconciled_by         TEXT,
+            reconciled_at         TEXT,
+            notes                 TEXT,
+            status                TEXT DEFAULT 'pending' CHECK(status IN ('pending','completed','reviewed')),
+            company_id            TEXT NOT NULL,
+            created_at            TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (patient_id) REFERENCES healthclaw_patient(id)
+        );
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_medrec_patient ON healthclaw_med_reconciliation(patient_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_medrec_status ON healthclaw_med_reconciliation(status)")
+
+    # -- healthclaw_immunization (H16) --
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS healthclaw_immunization (
+            id                    TEXT PRIMARY KEY,
+            patient_id            TEXT NOT NULL,
+            vaccine_name          TEXT NOT NULL,
+            vaccine_code          TEXT,
+            lot_number            TEXT,
+            manufacturer          TEXT,
+            administration_date   TEXT NOT NULL,
+            administration_site   TEXT,
+            administered_by       TEXT,
+            dose_number           INTEGER,
+            series_complete       INTEGER DEFAULT 0,
+            vis_date              TEXT,
+            next_due_date         TEXT,
+            reaction_notes        TEXT,
+            company_id            TEXT NOT NULL,
+            created_at            TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (patient_id) REFERENCES healthclaw_patient(id)
+        );
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_immun_patient ON healthclaw_immunization(patient_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_immun_vaccine ON healthclaw_immunization(vaccine_name)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_immun_duedate ON healthclaw_immunization(next_due_date)")
+
+    # -- healthclaw_provider_credential (H19) --
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS healthclaw_provider_credential (
+            id                    TEXT PRIMARY KEY,
+            provider_id           TEXT NOT NULL,
+            credential_type       TEXT NOT NULL CHECK(credential_type IN ('medical_license','dea','npi','board_certification','malpractice_insurance','cds','state_license','other')),
+            credential_number     TEXT,
+            issuing_authority     TEXT,
+            issue_date            TEXT,
+            expiration_date       TEXT,
+            status                TEXT DEFAULT 'active' CHECK(status IN ('active','expired','pending','revoked')),
+            verification_date     TEXT,
+            verified_by           TEXT,
+            notes                 TEXT,
+            company_id            TEXT NOT NULL,
+            created_at            TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at            TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (provider_id) REFERENCES employee(id)
+        );
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_provcred_provider ON healthclaw_provider_credential(provider_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_provcred_type ON healthclaw_provider_credential(credential_type)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_provcred_expiry ON healthclaw_provider_credential(expiration_date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_provcred_status ON healthclaw_provider_credential(status)")
+
+    # -- healthclaw_payer_enrollment (H20) --
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS healthclaw_payer_enrollment (
+            id                    TEXT PRIMARY KEY,
+            provider_id           TEXT NOT NULL,
+            payer_id              TEXT NOT NULL,
+            enrollment_status     TEXT NOT NULL CHECK(enrollment_status IN ('pending','active','inactive','terminated')),
+            effective_date        TEXT,
+            termination_date      TEXT,
+            revalidation_date     TEXT,
+            provider_number       TEXT,
+            group_npi             TEXT,
+            notes                 TEXT,
+            company_id            TEXT NOT NULL,
+            created_at            TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at            TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (payer_id) REFERENCES healthclaw_payer(id)
+        );
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_payerenroll_provider ON healthclaw_payer_enrollment(provider_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_payerenroll_payer ON healthclaw_payer_enrollment(payer_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_payerenroll_status ON healthclaw_payer_enrollment(enrollment_status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_healthclaw_payerenroll_reval ON healthclaw_payer_enrollment(revalidation_date)")
+
+    # ==========================================================
+    # Phase 11: Healthclaw Remaining (7 new tables)
+    # ==========================================================
+
+    # -- H7: Patient Statements --
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS healthclaw_patient_statement (
+            id                  TEXT PRIMARY KEY,
+            patient_id          TEXT NOT NULL,
+            statement_date      TEXT NOT NULL,
+            period_start        TEXT,
+            period_end          TEXT,
+            total_charges       TEXT DEFAULT '0',
+            insurance_payments  TEXT DEFAULT '0',
+            patient_payments    TEXT DEFAULT '0',
+            adjustments         TEXT DEFAULT '0',
+            balance_due         TEXT DEFAULT '0',
+            status              TEXT DEFAULT 'generated' CHECK (status IN ('generated','sent','paid')),
+            company_id          TEXT NOT NULL,
+            created_at          TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (patient_id) REFERENCES healthclaw_patient(id),
+            FOREIGN KEY (company_id) REFERENCES company(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_stmt_patient ON healthclaw_patient_statement(patient_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_stmt_date ON healthclaw_patient_statement(statement_date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_stmt_status ON healthclaw_patient_statement(status)")
+
+    # -- H8: Payment Plans --
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS healthclaw_payment_plan (
+            id                  TEXT PRIMARY KEY,
+            patient_id          TEXT NOT NULL,
+            total_amount        TEXT NOT NULL,
+            installment_amount  TEXT NOT NULL,
+            frequency           TEXT DEFAULT 'monthly' CHECK (frequency IN ('weekly','biweekly','monthly')),
+            start_date          TEXT NOT NULL,
+            next_due_date       TEXT,
+            num_installments  INTEGER,
+            installments_paid   INTEGER DEFAULT 0,
+            remaining_balance   TEXT NOT NULL,
+            status              TEXT DEFAULT 'active' CHECK (status IN ('active','completed','defaulted','cancelled')),
+            company_id          TEXT NOT NULL,
+            created_at          TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (patient_id) REFERENCES healthclaw_patient(id),
+            FOREIGN KEY (company_id) REFERENCES company(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_payplan_patient ON healthclaw_payment_plan(patient_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_payplan_status ON healthclaw_payment_plan(status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_payplan_due ON healthclaw_payment_plan(next_due_date)")
+
+    # -- H12: BAA Tracking --
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS healthclaw_baa (
+            id                      TEXT PRIMARY KEY,
+            vendor_name             TEXT NOT NULL,
+            vendor_contact          TEXT,
+            agreement_date          TEXT NOT NULL,
+            expiration_date         TEXT,
+            review_date             TEXT,
+            phi_categories          TEXT,
+            breach_notification_days INTEGER DEFAULT 60,
+            status                  TEXT DEFAULT 'active' CHECK (status IN ('active','expired','terminated')),
+            company_id              TEXT NOT NULL,
+            created_at              TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (company_id) REFERENCES company(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_baa_company ON healthclaw_baa(company_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_baa_status ON healthclaw_baa(status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_baa_expiry ON healthclaw_baa(expiration_date)")
+
+    # -- H13: Breach Incident --
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS healthclaw_breach_incident (
+            id                      TEXT PRIMARY KEY,
+            discovery_date          TEXT NOT NULL,
+            incident_date           TEXT,
+            description             TEXT NOT NULL,
+            phi_type                TEXT,
+            individuals_affected    INTEGER DEFAULT 0,
+            risk_level              TEXT CHECK (risk_level IN ('low','medium','high')),
+            notification_required   INTEGER DEFAULT 0,
+            notification_sent_date  TEXT,
+            hhs_reported            INTEGER DEFAULT 0,
+            hhs_report_date         TEXT,
+            remediation             TEXT,
+            status                  TEXT DEFAULT 'investigating' CHECK (status IN ('investigating','contained','remediated','closed')),
+            company_id              TEXT NOT NULL,
+            created_at              TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (company_id) REFERENCES company(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_breach_company ON healthclaw_breach_incident(company_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_breach_status ON healthclaw_breach_incident(status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_breach_risk ON healthclaw_breach_incident(risk_level)")
+
+    # -- H17: Care Team --
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS healthclaw_care_team (
+            id                  TEXT PRIMARY KEY,
+            patient_id          TEXT NOT NULL,
+            provider_id         TEXT NOT NULL,
+            role                TEXT NOT NULL CHECK (role IN ('pcp','specialist','care_coordinator','nurse','therapist','social_worker','pharmacist','other')),
+            start_date          TEXT,
+            end_date            TEXT,
+            status              TEXT DEFAULT 'active' CHECK (status IN ('active','inactive')),
+            company_id          TEXT NOT NULL,
+            created_at          TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (patient_id) REFERENCES healthclaw_patient(id),
+            FOREIGN KEY (provider_id) REFERENCES employee(id),
+            FOREIGN KEY (company_id) REFERENCES company(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_careteam_patient ON healthclaw_care_team(patient_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_careteam_provider ON healthclaw_care_team(provider_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_careteam_status ON healthclaw_care_team(status)")
+
+    # -- H6: Crossover Claims (secondary insurance tracking) --
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS healthclaw_crossover_claim (
+            id                      TEXT PRIMARY KEY,
+            original_claim_id       TEXT NOT NULL,
+            secondary_insurance_id  TEXT NOT NULL,
+            primary_paid_amount     TEXT DEFAULT '0',
+            primary_allowed_amount  TEXT DEFAULT '0',
+            remaining_balance       TEXT DEFAULT '0',
+            secondary_claim_id      TEXT,
+            status                  TEXT DEFAULT 'pending' CHECK (status IN ('pending','submitted','paid','denied')),
+            company_id              TEXT NOT NULL,
+            created_at              TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (original_claim_id) REFERENCES healthclaw_claim(id),
+            FOREIGN KEY (secondary_insurance_id) REFERENCES healthclaw_patient_insurance(id),
+            FOREIGN KEY (company_id) REFERENCES company(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_xover_original ON healthclaw_crossover_claim(original_claim_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_xover_status ON healthclaw_crossover_claim(status)")
+
+    # -- H25/H26: Scheduling Rules (simple key-value for online scheduling config) --
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS healthclaw_scheduling_rule (
+            id                  TEXT PRIMARY KEY,
+            rule_name           TEXT NOT NULL,
+            rule_type           TEXT NOT NULL CHECK (rule_type IN ('buffer_time','max_per_day','advance_booking_days','cancellation_hours','appointment_types_allowed')),
+            rule_value          TEXT NOT NULL,
+            provider_id         TEXT,
+            company_id          TEXT NOT NULL,
+            status              TEXT DEFAULT 'active' CHECK (status IN ('active','inactive')),
+            created_at          TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (company_id) REFERENCES company(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_schedrule_company ON healthclaw_scheduling_rule(company_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_hc_schedrule_type ON healthclaw_scheduling_rule(rule_type)")
+
     # ── Register naming series for all existing companies ────────
     companies = conn.execute("SELECT id FROM company").fetchall()
     naming_series = [
@@ -1571,7 +1831,7 @@ def create_healthclaw_tables(db_path):
 
     conn.close()
     print(f"{DISPLAY_NAME} schema created in {db_path}", file=sys.stderr)
-    print(f"  Tables: {len(tables_after)} (35 core + 5 advanced, all healthclaw_ prefix)", file=sys.stderr)
+    print(f"  Tables: {len(tables_after)} (35 core + 5 advanced + 5 phase8 + 7 phase11, all healthclaw_ prefix)", file=sys.stderr)
     print(f"  Indexes: {len(indexes_after)}", file=sys.stderr)
     print(f"  Naming series: {len(naming_series)} per company ({len(companies)} companies)", file=sys.stderr)
 

@@ -942,6 +942,128 @@ def era_reconciliation_report(conn, args):
     })
 
 
+# ===========================================================================
+# H20: Payer Enrollment
+# ===========================================================================
+VALID_ENROLLMENT_STATUSES = ("pending", "active", "inactive", "terminated")
+
+
+def add_payer_enrollment(conn, args):
+    """Enroll a provider with a payer."""
+    _validate_company(conn, args.company_id)
+
+    provider_id = getattr(args, "provider_id", None)
+    if not provider_id:
+        err("--provider-id is required")
+    if not conn.execute(Q.from_(Table("employee")).select(Field("id")).where(Field("id") == P()).get_sql(), (provider_id,)).fetchone():
+        err(f"Provider (employee) {provider_id} not found")
+
+    payer_id = getattr(args, "payer_id", None)
+    if not payer_id:
+        err("--payer-id is required")
+    if not conn.execute(Q.from_(Table("healthclaw_payer")).select(Field("id")).where(Field("id") == P()).get_sql(), (payer_id,)).fetchone():
+        err(f"Payer {payer_id} not found")
+
+    enrollment_status = getattr(args, "enrollment_status", None) or "pending"
+    _validate_enum(enrollment_status, VALID_ENROLLMENT_STATUSES, "enrollment-status")
+
+    enroll_id = str(uuid.uuid4())
+    now = _now_iso()
+    sql, _ = insert_row("healthclaw_payer_enrollment", {
+        "id": P(), "provider_id": P(), "payer_id": P(),
+        "enrollment_status": P(), "effective_date": P(),
+        "termination_date": P(), "revalidation_date": P(),
+        "provider_number": P(), "group_npi": P(), "notes": P(),
+        "company_id": P(), "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(sql, (
+        enroll_id, provider_id, payer_id, enrollment_status,
+        getattr(args, "effective_date", None),
+        getattr(args, "termination_date", None),
+        getattr(args, "revalidation_date", None),
+        getattr(args, "provider_number", None),
+        getattr(args, "group_npi", None),
+        getattr(args, "notes", None),
+        args.company_id, now, now,
+    ))
+    audit(conn, "healthclaw_payer_enrollment", enroll_id, "health-add-payer-enrollment", args.company_id)
+    conn.commit()
+    ok({"id": enroll_id, "provider_id": provider_id, "payer_id": payer_id, "enrollment_status": enrollment_status})
+
+
+def list_payer_enrollments(conn, args):
+    """List payer enrollments for a provider or payer."""
+    t = Table("healthclaw_payer_enrollment")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
+    if getattr(args, "company_id", None):
+        q_count = q_count.where(t.company_id == P()); q_rows = q_rows.where(t.company_id == P()); params.append(args.company_id)
+    if getattr(args, "provider_id", None):
+        q_count = q_count.where(t.provider_id == P()); q_rows = q_rows.where(t.provider_id == P()); params.append(args.provider_id)
+    if getattr(args, "payer_id", None):
+        q_count = q_count.where(t.payer_id == P()); q_rows = q_rows.where(t.payer_id == P()); params.append(args.payer_id)
+    if getattr(args, "enrollment_status", None):
+        q_count = q_count.where(t.enrollment_status == P()); q_rows = q_rows.where(t.enrollment_status == P()); params.append(args.enrollment_status)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.created_at, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
+    ok({
+        "rows": [row_to_dict(r) for r in rows],
+        "total_count": total, "limit": args.limit, "offset": args.offset,
+        "has_more": (args.offset + args.limit) < total,
+    })
+
+
+def check_enrollment_revalidation(conn, args):
+    """Check for payer enrollments needing revalidation within N days."""
+    _validate_company(conn, args.company_id)
+
+    from datetime import timedelta as _td
+    days = int(getattr(args, "days", None) or 90)
+    cutoff = (datetime.now(timezone.utc) + _td(days=days)).strftime("%Y-%m-%d")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    t = Table("healthclaw_payer_enrollment")
+    q = (Q.from_(t).select(t.star)
+         .where(t.company_id == P())
+         .where(t.enrollment_status == P())
+         .where(t.revalidation_date.isnotnull())
+         .where(t.revalidation_date <= P())
+         .orderby(t.revalidation_date, order=Order.asc))
+
+    rows = conn.execute(q.get_sql(), (args.company_id, "active", cutoff)).fetchall()
+
+    due = []
+    overdue = []
+    for r in rows:
+        data = row_to_dict(r)
+        reval_date = data.get("revalidation_date", "")
+        entry = {
+            "id": data["id"],
+            "provider_id": data["provider_id"],
+            "payer_id": data["payer_id"],
+            "provider_number": data.get("provider_number"),
+            "revalidation_date": reval_date,
+        }
+        if reval_date < today:
+            overdue.append(entry)
+        else:
+            due.append(entry)
+
+    ok({
+        "company_id": args.company_id,
+        "check_window_days": days,
+        "cutoff_date": cutoff,
+        "due_count": len(due),
+        "overdue_count": len(overdue),
+        "due": due,
+        "overdue": overdue,
+    })
+
+
 # ---------------------------------------------------------------------------
 # Action Router
 # ---------------------------------------------------------------------------
@@ -961,4 +1083,8 @@ ACTIONS = {
     "health-get-era-file-details": get_era_file_details,
     "health-auto-post-era": auto_post_era,
     "health-era-reconciliation-report": era_reconciliation_report,
+    # H20: Payer Enrollment
+    "health-add-payer-enrollment": add_payer_enrollment,
+    "health-list-payer-enrollments": list_payer_enrollments,
+    "health-check-enrollment-revalidation": check_enrollment_revalidation,
 }

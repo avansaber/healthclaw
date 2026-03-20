@@ -484,6 +484,244 @@ def list_waitlist(conn, args):
     ok({"rows": [row_to_dict(r) for r in rows], "total_count": total, "limit": args.limit, "offset": args.offset, "has_more": (args.offset + args.limit) < total})
 
 
+# ===========================================================================
+# H21: Multi-Resource Scheduling
+# ===========================================================================
+
+def check_room_availability(conn, args):
+    """Check if a location/room is available for a time slot."""
+    location = getattr(args, "location", None)
+    if not location:
+        err("--location is required")
+    appt_date = getattr(args, "appointment_date", None)
+    if not appt_date:
+        err("--appointment-date is required")
+    start = getattr(args, "start_time", None)
+    end = getattr(args, "end_time", None)
+    if not start or not end:
+        err("--start-time and --end-time are required")
+
+    t = Table("healthclaw_appointment")
+    # Find conflicting appointments at the same location, date, and overlapping time
+    # Overlap: existing.start < requested.end AND existing.end > requested.start
+    conflicts = conn.execute(
+        Q.from_(t)
+        .select(t.id, t.patient_id, t.provider_id, t.start_time, t.end_time, t.status)
+        .where(t.location == P())
+        .where(t.appointment_date == P())
+        .where(t.start_time < P())
+        .where(t.end_time > P())
+        .where(t.status.notin([P(), P()]))
+        .get_sql(),
+        (location, appt_date, end, start, "cancelled", "no_show")
+    ).fetchall()
+
+    conflict_list = [row_to_dict(r) for r in conflicts]
+    available = len(conflict_list) == 0
+
+    ok({
+        "location": location,
+        "date": appt_date,
+        "start_time": start,
+        "end_time": end,
+        "available": available,
+        "conflicts": conflict_list,
+        "conflict_count": len(conflict_list),
+    })
+
+
+def schedule_multi_resource(conn, args):
+    """Book appointment with provider + room + equipment check."""
+    _validate_company(conn, args.company_id)
+    _validate_patient(conn, args.patient_id)
+    _validate_provider(conn, args.provider_id)
+
+    appt_date = getattr(args, "appointment_date", None)
+    start = getattr(args, "start_time", None)
+    end = getattr(args, "end_time", None)
+    location = getattr(args, "location", None)
+    if not appt_date:
+        err("--appointment-date is required")
+    if not start or not end:
+        err("--start-time and --end-time are required")
+
+    warnings = []
+
+    # Check provider availability (schedule blocks)
+    block_t = Table("healthclaw_schedule_block")
+    block_conflicts = conn.execute(
+        Q.from_(block_t).select(fn.Count("*"))
+        .where(block_t.provider_id == P())
+        .where(block_t.block_date == P())
+        .get_sql(),
+        (args.provider_id, appt_date)
+    ).fetchone()[0]
+    if block_conflicts > 0:
+        warnings.append(f"Provider has {block_conflicts} schedule block(s) on {appt_date}")
+
+    # Check provider double-booking
+    appt_t = Table("healthclaw_appointment")
+    provider_conflicts = conn.execute(
+        Q.from_(appt_t).select(fn.Count("*"))
+        .where(appt_t.provider_id == P())
+        .where(appt_t.appointment_date == P())
+        .where(appt_t.start_time < P())
+        .where(appt_t.end_time > P())
+        .where(appt_t.status.notin([P(), P()]))
+        .get_sql(),
+        (args.provider_id, appt_date, end, start, "cancelled", "no_show")
+    ).fetchone()[0]
+    if provider_conflicts > 0:
+        warnings.append(f"Provider has {provider_conflicts} overlapping appointment(s)")
+
+    # Check room availability if location specified
+    room_conflicts = 0
+    if location:
+        room_conflicts = conn.execute(
+            Q.from_(appt_t).select(fn.Count("*"))
+            .where(appt_t.location == P())
+            .where(appt_t.appointment_date == P())
+            .where(appt_t.start_time < P())
+            .where(appt_t.end_time > P())
+            .where(appt_t.status.notin([P(), P()]))
+            .get_sql(),
+            (location, appt_date, end, start, "cancelled", "no_show")
+        ).fetchone()[0]
+        if room_conflicts > 0:
+            warnings.append(f"Room '{location}' has {room_conflicts} overlapping appointment(s)")
+
+    # If there are hard conflicts (room or provider), error out
+    if provider_conflicts > 0 or room_conflicts > 0:
+        err(f"Scheduling conflict: {'; '.join(warnings)}")
+
+    # Create the appointment
+    appt_type = getattr(args, "appointment_type", None) or "follow_up"
+    _validate_enum(appt_type, VALID_APPT_TYPES, "health-appointment-type")
+
+    appt_id = str(uuid.uuid4())
+    naming = get_next_name(conn, "healthclaw_appointment", company_id=args.company_id)
+    now = _now_iso()
+    sql, _ = insert_row("healthclaw_appointment", {
+        "id": P(), "naming_series": P(), "patient_id": P(), "provider_id": P(),
+        "appointment_date": P(), "start_time": P(), "end_time": P(),
+        "duration_minutes": P(), "appointment_type": P(),
+        "chief_complaint": P(), "location": P(), "status": P(),
+        "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P(),
+    })
+    conn.execute(sql, (
+        appt_id, naming, args.patient_id, args.provider_id, appt_date,
+        start, end,
+        int(getattr(args, "duration_minutes", None) or 30),
+        appt_type,
+        getattr(args, "chief_complaint", None),
+        location,
+        "scheduled", getattr(args, "notes", None),
+        args.company_id, now, now,
+    ))
+    audit(conn, "healthclaw_appointment", appt_id, "health-schedule-multi-resource", args.company_id)
+    conn.commit()
+    ok({
+        "id": appt_id, "naming_series": naming,
+        "appointment_date": appt_date, "appt_status": "scheduled",
+        "location": location,
+        "warnings": warnings,
+    })
+
+
+# ===========================================================================
+# H22: Appointment Reminders
+# ===========================================================================
+
+VALID_REMINDER_TYPES = ("sms", "email", "phone", "in_app")
+VALID_REMINDER_STATUSES = ("pending", "sent", "failed", "cancelled")
+
+
+def add_reminder(conn, args):
+    """Create an appointment reminder record."""
+    appt_id = getattr(args, "appointment_id", None)
+    if not appt_id:
+        err("--appointment-id is required")
+    if not conn.execute(Q.from_(Table("healthclaw_appointment")).select(Field("id")).where(Field("id") == P()).get_sql(), (appt_id,)).fetchone():
+        err(f"Appointment {appt_id} not found")
+
+    reminder_type = getattr(args, "reminder_type", None)
+    if not reminder_type:
+        err("--reminder-type is required")
+    _validate_enum(reminder_type, VALID_REMINDER_TYPES, "reminder-type")
+
+    scheduled_at = getattr(args, "scheduled_at", None)
+    if not scheduled_at:
+        err("--scheduled-at is required")
+
+    reminder_id = str(uuid.uuid4())
+    now = _now_iso()
+    sql, _ = insert_row("healthclaw_appointment_reminder", {
+        "id": P(), "appointment_id": P(), "reminder_type": P(),
+        "scheduled_at": P(), "sent_at": P(), "status": P(), "created_at": P(),
+    })
+    conn.execute(sql, (
+        reminder_id, appt_id, reminder_type, scheduled_at,
+        None, "pending", now,
+    ))
+    audit(conn, "healthclaw_appointment_reminder", reminder_id, "health-add-reminder", None)
+    conn.commit()
+    ok({"id": reminder_id, "appointment_id": appt_id, "reminder_type": reminder_type, "reminder_status": "pending"})
+
+
+def list_reminders(conn, args):
+    """List appointment reminders by status/date."""
+    t = Table("healthclaw_appointment_reminder")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
+    if getattr(args, "appointment_id", None):
+        q_count = q_count.where(t.appointment_id == P()); q_rows = q_rows.where(t.appointment_id == P()); params.append(args.appointment_id)
+    if getattr(args, "status", None):
+        q_count = q_count.where(t.status == P()); q_rows = q_rows.where(t.status == P()); params.append(args.status)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.scheduled_at, order=Order.asc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
+    ok({
+        "rows": [row_to_dict(r) for r in rows],
+        "total_count": total, "limit": args.limit, "offset": args.offset,
+        "has_more": (args.offset + args.limit) < total,
+    })
+
+
+def process_reminders(conn, args):
+    """Mark pending reminders as sent (batch process)."""
+    t = Table("healthclaw_appointment_reminder")
+    now = _now_iso()
+
+    # Find all pending reminders whose scheduled_at has passed
+    pending = conn.execute(
+        Q.from_(t).select(t.id, t.appointment_id, t.reminder_type, t.scheduled_at)
+        .where(t.status == P())
+        .where(t.scheduled_at <= P())
+        .orderby(t.scheduled_at, order=Order.asc)
+        .get_sql(),
+        ("pending", now)
+    ).fetchall()
+
+    processed = []
+    for r in pending:
+        rid = r[0]
+        data = {"status": "sent", "sent_at": now}
+        sql, params = dynamic_update("healthclaw_appointment_reminder", data, {"id": rid})
+        conn.execute(sql, params)
+        processed.append({
+            "id": rid,
+            "appointment_id": r[1],
+            "reminder_type": r[2],
+            "scheduled_at": r[3],
+        })
+
+    conn.commit()
+    ok({"processed_count": len(processed), "processed": processed})
+
+
 # ---------------------------------------------------------------------------
 # Action Router
 # ---------------------------------------------------------------------------
@@ -502,4 +740,11 @@ ACTIONS = {
     "health-cancel-appointment": cancel_appointment,
     "health-add-waitlist": add_waitlist,
     "health-list-waitlist": list_waitlist,
+    # H21: Multi-Resource Scheduling
+    "health-check-room-availability": check_room_availability,
+    "health-schedule-multi-resource": schedule_multi_resource,
+    # H22: Appointment Reminders
+    "health-add-reminder": add_reminder,
+    "health-list-reminders": list_reminders,
+    "health-process-reminders": process_reminders,
 }

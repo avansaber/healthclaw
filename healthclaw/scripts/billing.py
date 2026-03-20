@@ -1422,6 +1422,480 @@ def appeal_success_rate_report(conn, args):
     })
 
 
+# ===========================================================================
+# H6: Secondary Insurance Billing (Crossover Claims)
+# ===========================================================================
+
+VALID_CROSSOVER_STATUSES = ("pending", "submitted", "paid", "denied")
+
+
+def auto_crossover_claim(conn, args):
+    """When primary pays, auto-generate a crossover claim for secondary billing."""
+    _validate_company(conn, args.company_id)
+
+    claim_id = getattr(args, "claim_id", None)
+    if not claim_id:
+        err("--claim-id is required")
+    claim_row = conn.execute(
+        Q.from_(Table("healthclaw_claim")).select(
+            Table("healthclaw_claim").star
+        ).where(Field("id") == P()).get_sql(),
+        (claim_id,)
+    ).fetchone()
+    if not claim_row:
+        err(f"Claim {claim_id} not found")
+    claim = row_to_dict(claim_row)
+
+    if claim["claim_status"] not in ("paid", "partially_paid"):
+        err(f"Cannot create crossover: claim status is '{claim['claim_status']}', must be 'paid' or 'partially_paid'")
+
+    patient_id = claim["patient_id"]
+    # Find secondary insurance for this patient
+    ins_t = Table("healthclaw_patient_insurance")
+    secondary = conn.execute(
+        Q.from_(ins_t).select(ins_t.star)
+        .where(ins_t.patient_id == P())
+        .where(ins_t.insurance_type == P())
+        .where(ins_t.status == P())
+        .limit(1)
+        .get_sql(),
+        (patient_id, "secondary", "active")
+    ).fetchone()
+    if not secondary:
+        err("No active secondary insurance found for this patient")
+    sec_ins = row_to_dict(secondary)
+
+    # Calculate remaining balance
+    primary_paid = to_decimal(claim.get("total_paid", "0"))
+    primary_allowed = to_decimal(claim.get("total_allowed", "0"))
+    total_charged = to_decimal(claim.get("total_charge", "0"))
+    remaining = total_charged - primary_paid
+    if remaining < Decimal("0"):
+        remaining = Decimal("0")
+
+    xover_id = str(uuid.uuid4())
+    now = _now_iso()
+
+    sql, _ = insert_row("healthclaw_crossover_claim", {
+        "id": P(), "original_claim_id": P(), "secondary_insurance_id": P(),
+        "primary_paid_amount": P(), "primary_allowed_amount": P(),
+        "remaining_balance": P(), "secondary_claim_id": P(),
+        "status": P(), "company_id": P(), "created_at": P(),
+    })
+    conn.execute(sql, (
+        xover_id, claim_id, sec_ins["id"],
+        str(round_currency(primary_paid)),
+        str(round_currency(primary_allowed)),
+        str(round_currency(remaining)),
+        None, "pending", args.company_id, now,
+    ))
+    audit(conn, "healthclaw_crossover_claim", xover_id, "health-auto-crossover-claim", args.company_id)
+    conn.commit()
+    ok({
+        "id": xover_id,
+        "original_claim_id": claim_id,
+        "secondary_insurance_id": sec_ins["id"],
+        "secondary_payer_name": sec_ins["payer_name"],
+        "primary_paid_amount": str(round_currency(primary_paid)),
+        "remaining_balance": str(round_currency(remaining)),
+        "crossover_status": "pending",
+    })
+
+
+def list_crossover_claims(conn, args):
+    """List crossover claims pending secondary billing."""
+    _validate_company(conn, args.company_id)
+
+    t = Table("healthclaw_crossover_claim")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
+    q_count = q_count.where(t.company_id == P())
+    q_rows = q_rows.where(t.company_id == P())
+    params.append(args.company_id)
+
+    status = getattr(args, "status", None)
+    if status:
+        q_count = q_count.where(t.status == P())
+        q_rows = q_rows.where(t.status == P())
+        params.append(status)
+
+    patient_id = getattr(args, "patient_id", None)
+    if patient_id:
+        # Filter by patient through original claim
+        original_claims = conn.execute(
+            Q.from_(Table("healthclaw_claim")).select(Field("id"))
+            .where(Field("patient_id") == P())
+            .get_sql(),
+            (patient_id,)
+        ).fetchall()
+        if original_claims:
+            claim_ids = [r[0] for r in original_claims]
+            placeholders = ",".join(["?" for _ in claim_ids])
+            q_count = q_count.where(LiteralValue(f'"original_claim_id" IN ({placeholders})'))
+            q_rows = q_rows.where(LiteralValue(f'"original_claim_id" IN ({placeholders})'))
+            params.extend(claim_ids)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.created_at, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
+    ok({
+        "rows": [row_to_dict(r) for r in rows],
+        "total_count": total, "limit": args.limit, "offset": args.offset,
+        "has_more": (args.offset + args.limit) < total,
+    })
+
+
+# ===========================================================================
+# H7: Patient Statements
+# ===========================================================================
+
+VALID_STATEMENT_STATUSES = ("generated", "sent", "paid")
+
+
+def generate_patient_statement(conn, args):
+    """Generate a patient statement summarizing charges, payments, and balance."""
+    _validate_company(conn, args.company_id)
+    _validate_patient(conn, args.patient_id)
+
+    statement_date = getattr(args, "posting_date", None) or _now_iso()[:10]
+    period_start = getattr(args, "date_from", None)
+    period_end = getattr(args, "date_to", None)
+
+    # Calculate totals from charges
+    charge_t = Table("healthclaw_charge")
+    q_charges = Q.from_(charge_t).select(charge_t.charge_amount).where(
+        charge_t.patient_id == P()
+    )
+    charge_params = [args.patient_id]
+    if period_start:
+        q_charges = q_charges.where(charge_t.service_date >= P())
+        charge_params.append(period_start)
+    if period_end:
+        q_charges = q_charges.where(charge_t.service_date <= P())
+        charge_params.append(period_end)
+
+    charge_rows = conn.execute(q_charges.get_sql(), charge_params).fetchall()
+    total_charges = sum((to_decimal(r[0] or "0") for r in charge_rows), Decimal("0"))
+
+    # Calculate insurance payments from payment_posting (type = insurance_payment)
+    pp_t = Table("healthclaw_payment_posting")
+    q_ins = Q.from_(pp_t).select(pp_t.amount).where(
+        (pp_t.patient_id == P()) & (pp_t.posting_type == P())
+    )
+    ins_params = [args.patient_id, "insurance_payment"]
+    if period_start:
+        q_ins = q_ins.where(pp_t.posting_date >= P())
+        ins_params.append(period_start)
+    if period_end:
+        q_ins = q_ins.where(pp_t.posting_date <= P())
+        ins_params.append(period_end)
+
+    ins_rows = conn.execute(q_ins.get_sql(), ins_params).fetchall()
+    insurance_payments = sum((to_decimal(r[0] or "0") for r in ins_rows), Decimal("0"))
+
+    # Calculate patient payments
+    q_pat = Q.from_(pp_t).select(pp_t.amount).where(
+        (pp_t.patient_id == P()) & (pp_t.posting_type == P())
+    )
+    pat_params = [args.patient_id, "patient_payment"]
+    if period_start:
+        q_pat = q_pat.where(pp_t.posting_date >= P())
+        pat_params.append(period_start)
+    if period_end:
+        q_pat = q_pat.where(pp_t.posting_date <= P())
+        pat_params.append(period_end)
+
+    pat_rows = conn.execute(q_pat.get_sql(), pat_params).fetchall()
+    patient_payments = sum((to_decimal(r[0] or "0") for r in pat_rows), Decimal("0"))
+
+    # Calculate adjustments
+    q_adj = Q.from_(pp_t).select(pp_t.amount).where(
+        (pp_t.patient_id == P()) & (pp_t.posting_type.isin([P(), P()]))
+    )
+    adj_params = [args.patient_id, "adjustment", "write_off"]
+    if period_start:
+        q_adj = q_adj.where(pp_t.posting_date >= P())
+        adj_params.append(period_start)
+    if period_end:
+        q_adj = q_adj.where(pp_t.posting_date <= P())
+        adj_params.append(period_end)
+
+    adj_rows = conn.execute(q_adj.get_sql(), adj_params).fetchall()
+    adjustments = sum((to_decimal(r[0] or "0") for r in adj_rows), Decimal("0"))
+
+    balance_due = total_charges - insurance_payments - patient_payments - adjustments
+    if balance_due < Decimal("0"):
+        balance_due = Decimal("0")
+
+    stmt_id = str(uuid.uuid4())
+    now = _now_iso()
+
+    sql, _ = insert_row("healthclaw_patient_statement", {
+        "id": P(), "patient_id": P(), "statement_date": P(),
+        "period_start": P(), "period_end": P(),
+        "total_charges": P(), "insurance_payments": P(),
+        "patient_payments": P(), "adjustments": P(), "balance_due": P(),
+        "status": P(), "company_id": P(), "created_at": P(),
+    })
+    conn.execute(sql, (
+        stmt_id, args.patient_id, statement_date,
+        period_start, period_end,
+        str(round_currency(total_charges)),
+        str(round_currency(insurance_payments)),
+        str(round_currency(patient_payments)),
+        str(round_currency(adjustments)),
+        str(round_currency(balance_due)),
+        "generated", args.company_id, now,
+    ))
+    audit(conn, "healthclaw_patient_statement", stmt_id, "health-generate-patient-statement", args.company_id)
+    conn.commit()
+    ok({
+        "id": stmt_id,
+        "patient_id": args.patient_id,
+        "statement_date": statement_date,
+        "total_charges": str(round_currency(total_charges)),
+        "insurance_payments": str(round_currency(insurance_payments)),
+        "patient_payments": str(round_currency(patient_payments)),
+        "adjustments": str(round_currency(adjustments)),
+        "balance_due": str(round_currency(balance_due)),
+        "statement_status": "generated",
+    })
+
+
+def list_patient_statements(conn, args):
+    _validate_patient(conn, args.patient_id)
+
+    t = Table("healthclaw_patient_statement")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
+    q_count = q_count.where(t.patient_id == P())
+    q_rows = q_rows.where(t.patient_id == P())
+    params.append(args.patient_id)
+
+    status = getattr(args, "status", None)
+    if status:
+        q_count = q_count.where(t.status == P())
+        q_rows = q_rows.where(t.status == P())
+        params.append(status)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.statement_date, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
+    ok({
+        "rows": [row_to_dict(r) for r in rows],
+        "total_count": total, "limit": args.limit, "offset": args.offset,
+        "has_more": (args.offset + args.limit) < total,
+    })
+
+
+# ===========================================================================
+# H8: Payment Plans
+# ===========================================================================
+
+VALID_PAYMENT_PLAN_STATUSES = ("active", "completed", "defaulted", "cancelled")
+VALID_FREQUENCIES = ("weekly", "biweekly", "monthly")
+
+
+def add_payment_plan(conn, args):
+    _validate_company(conn, args.company_id)
+    _validate_patient(conn, args.patient_id)
+
+    total_amount = getattr(args, "amount", None)
+    if not total_amount:
+        err("--amount is required (total plan amount)")
+    installment_amount = getattr(args, "installment_amount", None)
+    if not installment_amount:
+        err("--installment-amount is required")
+    start_date = getattr(args, "start_date", None)
+    if not start_date:
+        err("--start-date is required")
+
+    frequency = getattr(args, "frequency", None) or "monthly"
+    _validate_enum(frequency, VALID_FREQUENCIES, "frequency")
+
+    total_dec = to_decimal(total_amount)
+    installment_dec = to_decimal(installment_amount)
+    if installment_dec <= Decimal("0"):
+        err("--installment-amount must be greater than 0")
+
+    # Calculate total installments
+    from decimal import ROUND_UP
+    num_installments = int((total_dec / installment_dec).to_integral_value(rounding=ROUND_UP))
+
+    plan_id = str(uuid.uuid4())
+    now = _now_iso()
+
+    sql, _ = insert_row("healthclaw_payment_plan", {
+        "id": P(), "patient_id": P(), "total_amount": P(),
+        "installment_amount": P(), "frequency": P(), "start_date": P(),
+        "next_due_date": P(), "num_installments": P(),
+        "installments_paid": P(), "remaining_balance": P(),
+        "status": P(), "company_id": P(), "created_at": P(),
+    })
+    conn.execute(sql, (
+        plan_id, args.patient_id,
+        str(round_currency(total_dec)),
+        str(round_currency(installment_dec)),
+        frequency, start_date, start_date,
+        num_installments, 0,
+        str(round_currency(total_dec)),
+        "active", args.company_id, now,
+    ))
+    audit(conn, "healthclaw_payment_plan", plan_id, "health-add-payment-plan", args.company_id)
+    conn.commit()
+    ok({
+        "id": plan_id,
+        "patient_id": args.patient_id,
+        "total_amount": str(round_currency(total_dec)),
+        "installment_amount": str(round_currency(installment_dec)),
+        "frequency": frequency,
+        "num_installments": num_installments,
+        "remaining_balance": str(round_currency(total_dec)),
+        "plan_status": "active",
+    })
+
+
+def list_payment_plans(conn, args):
+    _validate_patient(conn, args.patient_id)
+
+    t = Table("healthclaw_payment_plan")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
+    q_count = q_count.where(t.patient_id == P())
+    q_rows = q_rows.where(t.patient_id == P())
+    params.append(args.patient_id)
+
+    status = getattr(args, "status", None)
+    if status:
+        q_count = q_count.where(t.status == P())
+        q_rows = q_rows.where(t.status == P())
+        params.append(status)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.created_at, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
+    ok({
+        "rows": [row_to_dict(r) for r in rows],
+        "total_count": total, "limit": args.limit, "offset": args.offset,
+        "has_more": (args.offset + args.limit) < total,
+    })
+
+
+def record_plan_payment(conn, args):
+    """Record a payment against a payment plan."""
+    plan_id = getattr(args, "payment_plan_id", None)
+    if not plan_id:
+        err("--payment-plan-id is required")
+
+    t = Table("healthclaw_payment_plan")
+    row = conn.execute(
+        Q.from_(t).select(t.star).where(t.id == P()).get_sql(),
+        (plan_id,)
+    ).fetchone()
+    if not row:
+        err(f"Payment plan {plan_id} not found")
+    plan = row_to_dict(row)
+
+    if plan["status"] != "active":
+        err(f"Cannot record payment: plan status is '{plan['status']}', must be 'active'")
+
+    amount = getattr(args, "amount", None)
+    payment_amount = to_decimal(amount) if amount else to_decimal(plan["installment_amount"])
+
+    remaining = to_decimal(plan["remaining_balance"]) - payment_amount
+    if remaining < Decimal("0"):
+        remaining = Decimal("0")
+    installments_paid = int(plan["installments_paid"]) + 1
+
+    new_status = "active"
+    if remaining <= Decimal("0"):
+        new_status = "completed"
+
+    # Calculate next due date
+    next_due = None
+    if new_status == "active" and plan.get("next_due_date"):
+        from datetime import timedelta
+        current_due = datetime.strptime(plan["next_due_date"][:10], "%Y-%m-%d")
+        freq = plan.get("frequency", "monthly")
+        if freq == "weekly":
+            next_due = (current_due + timedelta(days=7)).strftime("%Y-%m-%d")
+        elif freq == "biweekly":
+            next_due = (current_due + timedelta(days=14)).strftime("%Y-%m-%d")
+        else:  # monthly
+            month = current_due.month + 1
+            year = current_due.year
+            if month > 12:
+                month = 1
+                year += 1
+            day = min(current_due.day, 28)
+            next_due = f"{year:04d}-{month:02d}-{day:02d}"
+
+    data = {
+        "remaining_balance": str(round_currency(remaining)),
+        "installments_paid": installments_paid,
+        "status": new_status,
+    }
+    if next_due:
+        data["next_due_date"] = next_due
+
+    sql, params = dynamic_update("healthclaw_payment_plan", data, {"id": plan_id})
+    conn.execute(sql, params)
+    audit(conn, "healthclaw_payment_plan", plan_id, "health-record-plan-payment", None,
+          {"payment_amount": str(round_currency(payment_amount))})
+    conn.commit()
+    ok({
+        "id": plan_id,
+        "payment_amount": str(round_currency(payment_amount)),
+        "remaining_balance": str(round_currency(remaining)),
+        "installments_paid": installments_paid,
+        "next_due_date": next_due,
+        "plan_status": new_status,
+    })
+
+
+def payment_plan_status(conn, args):
+    """Get detailed status of a payment plan."""
+    plan_id = getattr(args, "payment_plan_id", None)
+    if not plan_id:
+        err("--payment-plan-id is required")
+
+    t = Table("healthclaw_payment_plan")
+    row = conn.execute(
+        Q.from_(t).select(t.star).where(t.id == P()).get_sql(),
+        (plan_id,)
+    ).fetchone()
+    if not row:
+        err(f"Payment plan {plan_id} not found")
+    plan = row_to_dict(row)
+
+    total = to_decimal(plan["total_amount"])
+    remaining = to_decimal(plan["remaining_balance"])
+    paid_amount = total - remaining
+    pct_complete = Decimal("0")
+    if total > Decimal("0"):
+        pct_complete = round_currency(paid_amount / total * Decimal("100"))
+
+    ok({
+        "id": plan_id,
+        "patient_id": plan["patient_id"],
+        "total_amount": plan["total_amount"],
+        "remaining_balance": plan["remaining_balance"],
+        "amount_paid": str(round_currency(paid_amount)),
+        "pct_complete": str(pct_complete),
+        "num_installments": plan.get("num_installments"),
+        "installments_paid": plan.get("installments_paid", 0),
+        "next_due_date": plan.get("next_due_date"),
+        "frequency": plan.get("frequency"),
+        "plan_status": plan["status"],
+    })
+
+
 # ---------------------------------------------------------------------------
 # Action Router
 # ---------------------------------------------------------------------------
@@ -1449,4 +1923,15 @@ ACTIONS = {
     "health-list-denied-claims": list_denied_claims,
     "health-denial-trend-report": denial_trend_report,
     "health-appeal-success-rate-report": appeal_success_rate_report,
+    # H6: Secondary Insurance Billing
+    "health-auto-crossover-claim": auto_crossover_claim,
+    "health-list-crossover-claims": list_crossover_claims,
+    # H7: Patient Statements
+    "health-generate-patient-statement": generate_patient_statement,
+    "health-list-patient-statements": list_patient_statements,
+    # H8: Payment Plans
+    "health-add-payment-plan": add_payment_plan,
+    "health-list-payment-plans": list_payment_plans,
+    "health-record-plan-payment": record_plan_payment,
+    "health-payment-plan-status": payment_plan_status,
 }

@@ -839,6 +839,400 @@ def mips_submission_report(conn, args):
     })
 
 
+# ===========================================================================
+# H12: BAA (Business Associate Agreement) Tracking
+# ===========================================================================
+
+VALID_BAA_STATUSES = ("active", "expired", "terminated")
+
+
+def add_baa(conn, args):
+    _validate_company(conn, args.company_id)
+
+    vendor_name = getattr(args, "vendor_name", None)
+    if not vendor_name:
+        err("--vendor-name is required")
+    agreement_date = getattr(args, "agreement_date", None)
+    if not agreement_date:
+        err("--agreement-date is required")
+
+    baa_id = str(uuid.uuid4())
+    now = _now_iso()
+
+    sql, _ = insert_row("healthclaw_baa", {
+        "id": P(), "vendor_name": P(), "vendor_contact": P(),
+        "agreement_date": P(), "expiration_date": P(), "review_date": P(),
+        "phi_categories": P(), "breach_notification_days": P(),
+        "status": P(), "company_id": P(), "created_at": P(),
+    })
+    conn.execute(sql, (
+        baa_id, vendor_name,
+        getattr(args, "vendor_contact", None),
+        agreement_date,
+        getattr(args, "expiration_date", None),
+        getattr(args, "review_date", None),
+        getattr(args, "phi_categories", None),
+        int(getattr(args, "breach_notification_days", None) or 60),
+        "active", args.company_id, now,
+    ))
+    audit(conn, "healthclaw_baa", baa_id, "health-add-baa", args.company_id)
+    conn.commit()
+    ok({
+        "id": baa_id,
+        "vendor_name": vendor_name,
+        "agreement_date": agreement_date,
+        "baa_status": "active",
+    })
+
+
+def list_baas(conn, args):
+    _validate_company(conn, args.company_id)
+
+    t = Table("healthclaw_baa")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
+    q_count = q_count.where(t.company_id == P())
+    q_rows = q_rows.where(t.company_id == P())
+    params.append(args.company_id)
+
+    status = getattr(args, "status", None)
+    if status:
+        q_count = q_count.where(t.status == P())
+        q_rows = q_rows.where(t.status == P())
+        params.append(status)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.expiration_date, order=Order.asc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
+    ok({
+        "rows": [row_to_dict(r) for r in rows],
+        "total_count": total, "limit": args.limit, "offset": args.offset,
+        "has_more": (args.offset + args.limit) < total,
+    })
+
+
+def check_expiring_baas(conn, args):
+    """Check for BAAs expiring within the next N days."""
+    _validate_company(conn, args.company_id)
+
+    days = int(getattr(args, "days", None) or 90)
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%Y-%m-%d")
+
+    t = Table("healthclaw_baa")
+    rows = conn.execute(
+        Q.from_(t).select(t.star)
+        .where(t.company_id == P())
+        .where(t.status == P())
+        .where(t.expiration_date.isnotnull())
+        .where(t.expiration_date <= P())
+        .orderby(t.expiration_date, order=Order.asc)
+        .get_sql(),
+        (args.company_id, "active", cutoff)
+    ).fetchall()
+
+    expiring = [row_to_dict(r) for r in rows]
+    ok({
+        "company_id": args.company_id,
+        "days_ahead": days,
+        "cutoff_date": cutoff,
+        "expiring_count": len(expiring),
+        "expiring_baas": expiring,
+    })
+
+
+# ===========================================================================
+# H13: Breach Incident Management
+# ===========================================================================
+
+VALID_RISK_LEVELS = ("low", "medium", "high")
+VALID_BREACH_STATUSES = ("investigating", "contained", "remediated", "closed")
+
+
+def add_breach_incident(conn, args):
+    _validate_company(conn, args.company_id)
+
+    discovery_date = getattr(args, "discovery_date", None)
+    if not discovery_date:
+        err("--discovery-date is required")
+    description = getattr(args, "description", None)
+    if not description:
+        err("--description is required")
+
+    risk_level = getattr(args, "risk_level", None)
+    _validate_enum(risk_level, VALID_RISK_LEVELS, "risk-level")
+
+    breach_id = str(uuid.uuid4())
+    now = _now_iso()
+
+    sql, _ = insert_row("healthclaw_breach_incident", {
+        "id": P(), "discovery_date": P(), "incident_date": P(),
+        "description": P(), "phi_type": P(), "individuals_affected": P(),
+        "risk_level": P(), "notification_required": P(),
+        "notification_sent_date": P(), "hhs_reported": P(),
+        "hhs_report_date": P(), "remediation": P(),
+        "status": P(), "company_id": P(), "created_at": P(),
+    })
+    conn.execute(sql, (
+        breach_id, discovery_date,
+        getattr(args, "incident_date", None),
+        description,
+        getattr(args, "phi_type", None),
+        int(getattr(args, "individuals_affected", None) or 0),
+        risk_level or "medium",
+        int(getattr(args, "notification_required", None) or 0),
+        None, 0, None,
+        getattr(args, "remediation", None),
+        "investigating", args.company_id, now,
+    ))
+    audit(conn, "healthclaw_breach_incident", breach_id, "health-add-breach-incident", args.company_id)
+    conn.commit()
+    ok({
+        "id": breach_id,
+        "discovery_date": discovery_date,
+        "risk_level": risk_level or "medium",
+        "breach_status": "investigating",
+    })
+
+
+def update_breach_incident(conn, args):
+    breach_id = getattr(args, "breach_id", None)
+    if not breach_id:
+        err("--breach-id is required")
+
+    t = Table("healthclaw_breach_incident")
+    row = conn.execute(
+        Q.from_(t).select(t.id).where(t.id == P()).get_sql(),
+        (breach_id,)
+    ).fetchone()
+    if not row:
+        err(f"Breach incident {breach_id} not found")
+
+    data, changed = {}, []
+    for arg_name, col_name in {
+        "description": "description", "phi_type": "phi_type",
+        "remediation": "remediation", "notification_sent_date": "notification_sent_date",
+        "hhs_report_date": "hhs_report_date", "incident_date": "incident_date",
+    }.items():
+        val = getattr(args, arg_name, None)
+        if val is not None:
+            data[col_name] = val
+            changed.append(col_name)
+
+    risk_level = getattr(args, "risk_level", None)
+    if risk_level:
+        _validate_enum(risk_level, VALID_RISK_LEVELS, "risk-level")
+        data["risk_level"] = risk_level
+        changed.append("risk_level")
+
+    status = getattr(args, "status", None)
+    if status:
+        _validate_enum(status, VALID_BREACH_STATUSES, "status")
+        data["status"] = status
+        changed.append("status")
+
+    individuals = getattr(args, "individuals_affected", None)
+    if individuals is not None:
+        data["individuals_affected"] = int(individuals)
+        changed.append("individuals_affected")
+
+    notification_required = getattr(args, "notification_required", None)
+    if notification_required is not None:
+        data["notification_required"] = int(notification_required)
+        changed.append("notification_required")
+
+    hhs_reported = getattr(args, "hhs_reported", None)
+    if hhs_reported is not None:
+        data["hhs_reported"] = int(hhs_reported)
+        changed.append("hhs_reported")
+
+    if not data:
+        err("No fields to update")
+
+    sql, params = dynamic_update("healthclaw_breach_incident", data, {"id": breach_id})
+    conn.execute(sql, params)
+    audit(conn, "healthclaw_breach_incident", breach_id, "health-update-breach-incident", None)
+    conn.commit()
+    ok({"id": breach_id, "updated_fields": changed})
+
+
+def list_breach_incidents(conn, args):
+    _validate_company(conn, args.company_id)
+
+    t = Table("healthclaw_breach_incident")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
+    q_count = q_count.where(t.company_id == P())
+    q_rows = q_rows.where(t.company_id == P())
+    params.append(args.company_id)
+
+    status = getattr(args, "status", None)
+    if status:
+        q_count = q_count.where(t.status == P())
+        q_rows = q_rows.where(t.status == P())
+        params.append(status)
+
+    risk_level = getattr(args, "risk_level", None)
+    if risk_level:
+        q_count = q_count.where(t.risk_level == P())
+        q_rows = q_rows.where(t.risk_level == P())
+        params.append(risk_level)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.discovery_date, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
+    ok({
+        "rows": [row_to_dict(r) for r in rows],
+        "total_count": total, "limit": args.limit, "offset": args.offset,
+        "has_more": (args.offset + args.limit) < total,
+    })
+
+
+def breach_summary_report(conn, args):
+    """Summary report of all breach incidents."""
+    _validate_company(conn, args.company_id)
+
+    t = Table("healthclaw_breach_incident")
+    all_rows = conn.execute(
+        Q.from_(t).select(t.star)
+        .where(t.company_id == P())
+        .get_sql(),
+        (args.company_id,)
+    ).fetchall()
+
+    by_status = {}
+    by_risk = {}
+    total_affected = 0
+    hhs_reported_count = 0
+
+    for r in all_rows:
+        d = row_to_dict(r)
+        s = d.get("status", "investigating")
+        rl = d.get("risk_level", "medium")
+        by_status[s] = by_status.get(s, 0) + 1
+        by_risk[rl] = by_risk.get(rl, 0) + 1
+        total_affected += int(d.get("individuals_affected", 0) or 0)
+        if int(d.get("hhs_reported", 0) or 0) == 1:
+            hhs_reported_count += 1
+
+    ok({
+        "company_id": args.company_id,
+        "total_incidents": len(all_rows),
+        "by_status": by_status,
+        "by_risk_level": by_risk,
+        "total_individuals_affected": total_affected,
+        "hhs_reported_count": hhs_reported_count,
+    })
+
+
+# ===========================================================================
+# H38: Consent Form Versioning
+# ===========================================================================
+
+def add_consent_template(conn, args):
+    """Add a consent template (versioned). Stored as a consent record with template metadata."""
+    _validate_company(conn, args.company_id)
+
+    consent_type = getattr(args, "consent_type", None)
+    if not consent_type:
+        err("--consent-type is required")
+
+    description = getattr(args, "description", None)
+    if not description:
+        err("--description is required (template body text)")
+
+    # Store as a consent record with a special patient_id = 'TEMPLATE'
+    # and version info in the notes field
+    version = getattr(args, "version", None) or "1.0"
+    template_id = str(uuid.uuid4())
+    now = _now_iso()
+
+    sql, _ = insert_row("healthclaw_consent", {
+        "id": P(), "patient_id": P(), "consent_type": P(),
+        "description": P(), "granted_date": P(), "expiration_date": P(),
+        "status": P(), "witness_name": P(), "obtained_by_id": P(),
+        "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P(),
+    })
+
+    # Use a template marker — store under company's first patient or create a system patient
+    # Find any patient in this company to satisfy FK (template records are filtered by notes JSON)
+    any_patient = conn.execute(
+        Q.from_(Table("healthclaw_patient")).select(Field("id"))
+        .where(Field("company_id") == P()).limit(1).get_sql(),
+        (args.company_id,)
+    ).fetchone()
+    if not any_patient:
+        err("At least one patient must exist before creating consent templates")
+    template_patient_id = any_patient[0]
+
+    conn.execute(sql, (
+        template_id, template_patient_id, consent_type,
+        description, now[:10], None,
+        "active", None, None,
+        json.dumps({"template": True, "version": version}),
+        args.company_id, now, now,
+    ))
+    audit(conn, "healthclaw_consent", template_id, "health-add-consent-template", args.company_id)
+    conn.commit()
+    ok({
+        "id": template_id,
+        "consent_type": consent_type,
+        "version": version,
+        "template_status": "active",
+    })
+
+
+def list_consent_templates(conn, args):
+    """List consent templates (consent records where notes contains template=true)."""
+    _validate_company(conn, args.company_id)
+
+    t = Table("healthclaw_consent")
+    # Templates are stored with notes containing {"template": true}
+    # We use LIKE to filter for template records
+    template_filter = LiteralValue('"notes" LIKE \'%"template": true%\'')
+
+    q_count = Q.from_(t).select(fn.Count("*")).where(
+        (t.company_id == P()) & template_filter
+    )
+    q_rows = Q.from_(t).select(t.star).where(
+        (t.company_id == P()) & template_filter
+    )
+    params = [args.company_id]
+
+    consent_type = getattr(args, "consent_type", None)
+    if consent_type:
+        q_count = q_count.where(t.consent_type == P())
+        q_rows = q_rows.where(t.consent_type == P())
+        params.append(consent_type)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    q_rows = q_rows.orderby(t.created_at, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [args.limit, args.offset]).fetchall()
+
+    # Enrich with version from notes JSON
+    enriched = []
+    for r in rows:
+        d = row_to_dict(r)
+        try:
+            meta = json.loads(d.get("notes", "{}"))
+            d["version"] = meta.get("version", "1.0")
+            d["is_template"] = meta.get("template", False)
+        except (json.JSONDecodeError, TypeError):
+            d["version"] = "1.0"
+            d["is_template"] = True
+        enriched.append(d)
+
+    ok({
+        "rows": enriched,
+        "total_count": total, "limit": args.limit, "offset": args.offset,
+        "has_more": (args.offset + args.limit) < total,
+    })
+
+
 # ---------------------------------------------------------------------------
 # Action Router
 # ---------------------------------------------------------------------------
@@ -854,4 +1248,16 @@ ACTIONS = {
     "health-calculate-measure-result": calculate_measure_result,
     "health-mips-performance-dashboard": mips_performance_dashboard,
     "health-mips-submission-report": mips_submission_report,
+    # H12: BAA Tracking
+    "health-add-baa": add_baa,
+    "health-list-baas": list_baas,
+    "health-check-expiring-baas": check_expiring_baas,
+    # H13: Breach Incident
+    "health-add-breach-incident": add_breach_incident,
+    "health-update-breach-incident": update_breach_incident,
+    "health-list-breach-incidents": list_breach_incidents,
+    "health-breach-summary-report": breach_summary_report,
+    # H38: Consent Templates
+    "health-add-consent-template": add_consent_template,
+    "health-list-consent-templates": list_consent_templates,
 }

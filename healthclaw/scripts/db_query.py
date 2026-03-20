@@ -49,6 +49,8 @@ from adv_billing import ACTIONS as ADV_BILLING_ACTIONS
 from adv_reports import ACTIONS as ADV_REPORTS_ACTIONS
 from rcm import ACTIONS as RCM_ACTIONS
 from compliance import ACTIONS as COMPLIANCE_ACTIONS
+from provider_mgmt import ACTIONS as PROVIDER_MGMT_ACTIONS
+from adv_reports_v2 import ACTIONS as ADV_REPORTS_V2_ACTIONS
 
 # ---------------------------------------------------------------------------
 # Merge all domain actions into one router
@@ -77,12 +79,19 @@ ACTIONS.update(RCM_ACTIONS)
 # Merge Compliance domain (PHI audit, Good Faith Estimate, MIPS)
 ACTIONS.update(COMPLIANCE_ACTIONS)
 
+# Merge Provider Management domain (credentialing)
+ACTIONS.update(PROVIDER_MGMT_ACTIONS)
+
+# Merge Phase 11 reports & misc (aging, superbill, stubs, growth chart, etc.)
+ACTIONS.update(ADV_REPORTS_V2_ACTIONS)
+
 ACTIONS["status"] = lambda conn, args: ok({
     "skill": SKILL,
     "version": "2.0.0",
     "actions_available": len([k for k in ACTIONS if k != "status"]),
     "domains": ["patients", "appointments", "clinical", "billing", "inventory", "lab", "referrals",
-                "adv_pharmacy", "adv_lab", "adv_billing", "adv_reports", "rcm", "compliance"],
+                "adv_pharmacy", "adv_lab", "adv_billing", "adv_reports", "adv_reports_v2",
+                "rcm", "compliance", "provider_mgmt"],
     "database": DEFAULT_DB_PATH,
 })
 
@@ -491,6 +500,46 @@ def main():
     parser.add_argument("--file-name")
     parser.add_argument("--posted-by")
 
+    # ── Phase 8 Clinical Depth: Problem List / Med Recon / Immunization / Provider Cred / Payer Enrollment / Reminders / Merge ──
+    # H15: Med Reconciliation
+    parser.add_argument("--reconciliation-id")
+    parser.add_argument("--reconciliation-type")
+    parser.add_argument("--medications-reviewed")
+    parser.add_argument("--medications-added")
+    parser.add_argument("--medications-removed")
+    parser.add_argument("--medications-changed")
+    parser.add_argument("--reconciled-by")
+    # H16: Immunization
+    parser.add_argument("--immunization-id")
+    parser.add_argument("--vaccine-name")
+    parser.add_argument("--vaccine-code")
+    parser.add_argument("--administration-date")
+    parser.add_argument("--administration-site")
+    parser.add_argument("--administered-by")
+    parser.add_argument("--dose-number")
+    parser.add_argument("--series-complete")
+    parser.add_argument("--vis-date")
+    parser.add_argument("--next-due-date")
+    parser.add_argument("--reaction-notes")
+    # H19: Provider Credentialing
+    parser.add_argument("--credential-type")
+    parser.add_argument("--credential-number")
+    parser.add_argument("--issuing-authority")
+    parser.add_argument("--issue-date")
+    parser.add_argument("--verification-date")
+    parser.add_argument("--verified-by")
+    # H20: Payer Enrollment
+    parser.add_argument("--enrollment-status")
+    parser.add_argument("--revalidation-date")
+    parser.add_argument("--provider-number")
+    parser.add_argument("--group-npi")
+    # H22: Appointment Reminders
+    parser.add_argument("--reminder-type")
+    parser.add_argument("--scheduled-at")
+    # H42: Patient Merge
+    parser.add_argument("--source-patient-id")
+    parser.add_argument("--target-patient-id")
+
     # ── COMPLIANCE domain (PHI audit, GFE, MIPS) ─────────
     parser.add_argument("--access-type")
     parser.add_argument("--data-category")
@@ -516,6 +565,43 @@ def main():
     parser.add_argument("--benchmark")
     parser.add_argument("--reporting-period")
     parser.add_argument("--points-earned")
+
+    # ── Phase 11: Healthclaw Remaining ────────────────────────
+    # H17: Care Team
+    parser.add_argument("--role")
+    parser.add_argument("--care-team-id")
+    parser.add_argument("--start-date")
+    # H18: Patient Education
+    parser.add_argument("--education-type")
+    # H23: Recurring Appointments
+    parser.add_argument("--recurrence-count")
+    parser.add_argument("--interval-days")
+    # H8: Payment Plans
+    parser.add_argument("--installment-amount")
+    parser.add_argument("--payment-plan-id")
+    # H12: BAA Tracking
+    parser.add_argument("--vendor-name")
+    parser.add_argument("--vendor-contact")
+    parser.add_argument("--agreement-date")
+    parser.add_argument("--review-date")
+    parser.add_argument("--phi-categories")
+    parser.add_argument("--breach-notification-days")
+    # H13: Breach Incident
+    parser.add_argument("--breach-id")
+    parser.add_argument("--discovery-date")
+    parser.add_argument("--incident-date")
+    parser.add_argument("--phi-type")
+    parser.add_argument("--individuals-affected")
+    parser.add_argument("--risk-level")
+    parser.add_argument("--notification-required")
+    parser.add_argument("--notification-sent-date")
+    parser.add_argument("--hhs-reported")
+    parser.add_argument("--hhs-report-date")
+    parser.add_argument("--remediation")
+    # H38: Consent Template versioning
+    parser.add_argument("--version")
+    # H44: Growth Chart
+    parser.add_argument("--age-months")
 
     args, unknown = parser.parse_known_args()
     check_unknown_args(parser, unknown)

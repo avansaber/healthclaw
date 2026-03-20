@@ -778,6 +778,122 @@ def add_consent(conn, args):
     ok({"id": consent_id, "consent_type": consent_type, "status": "active"})
 
 
+# ===========================================================================
+# H42: Patient Merge
+# ===========================================================================
+
+# Tables with patient_id FK that need to be repointed during merge
+_PATIENT_FK_TABLES = [
+    "healthclaw_patient_insurance",
+    "healthclaw_allergy",
+    "healthclaw_medical_history",
+    "healthclaw_consent",
+    "healthclaw_appointment",
+    "healthclaw_encounter",
+    "healthclaw_vitals",
+    "healthclaw_diagnosis",
+    "healthclaw_prescription",
+    "healthclaw_procedure",
+    "healthclaw_clinical_note",
+    "healthclaw_charge",
+    "healthclaw_claim",
+    "healthclaw_payment_posting",
+    "healthclaw_lab_order",
+    "healthclaw_referral",
+    "healthclaw_patient_contact",
+    "healthclaw_med_reconciliation",
+    "healthclaw_immunization",
+]
+
+
+def merge_patients(conn, args):
+    """Merge source patient into target patient.
+
+    Repoints ALL FK references from source to target across all healthclaw tables,
+    then soft-deletes the source patient (status='inactive', notes='merged into {target}').
+    """
+    source_id = getattr(args, "source_patient_id", None)
+    target_id = getattr(args, "target_patient_id", None)
+    if not source_id:
+        err("--source-patient-id is required")
+    if not target_id:
+        err("--target-patient-id is required")
+    if source_id == target_id:
+        err("Source and target patient cannot be the same")
+
+    # Validate both patients exist
+    _validate_patient(conn, source_id)
+    _validate_patient(conn, target_id)
+
+    # Check source is not already inactive
+    pat_t = Table("healthclaw_patient")
+    source_row = conn.execute(
+        Q.from_(pat_t).select(pat_t.status, pat_t.full_name)
+        .where(pat_t.id == P()).get_sql(), (source_id,)
+    ).fetchone()
+    if source_row[0] == "inactive":
+        err(f"Source patient {source_id} is already inactive (may have been merged previously)")
+
+    target_row = conn.execute(
+        Q.from_(pat_t).select(pat_t.full_name)
+        .where(pat_t.id == P()).get_sql(), (target_id,)
+    ).fetchone()
+
+    source_name = source_row[1]
+    target_name = target_row[0]
+
+    # Repoint all FK references within a single transaction
+    repoint_counts = {}
+    for table_name in _PATIENT_FK_TABLES:
+        # Check if table exists (some Phase 8 tables may not exist in older schemas)
+        table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,)
+        ).fetchone()
+        if not table_exists:
+            continue
+
+        t = Table(table_name)
+        count = conn.execute(
+            Q.from_(t).select(fn.Count("*")).where(t.patient_id == P()).get_sql(),
+            (source_id,)
+        ).fetchone()[0]
+        if count > 0:
+            sql, params = dynamic_update(table_name, {"patient_id": target_id}, {"patient_id": source_id})
+            conn.execute(sql, params)
+            repoint_counts[table_name] = count
+
+    # Soft-delete source patient
+    merge_note = f"Merged into patient {target_id} ({target_name}) on {_now_iso()}"
+    upd_data = {
+        "status": "inactive",
+        "notes": merge_note,
+        "updated_at": now(),
+    }
+    sql, params = dynamic_update("healthclaw_patient", upd_data, {"id": source_id})
+    conn.execute(sql, params)
+
+    audit(conn, "healthclaw_patient", source_id, "health-merge-patients", None, {
+        "source_id": source_id, "target_id": target_id,
+        "repoint_counts": repoint_counts,
+    })
+    audit(conn, "healthclaw_patient", target_id, "health-merge-patients-target", None, {
+        "source_id": source_id, "merged_from": source_name,
+    })
+    conn.commit()
+
+    total_repointed = sum(repoint_counts.values())
+    ok({
+        "source_patient_id": source_id,
+        "target_patient_id": target_id,
+        "source_name": source_name,
+        "target_name": target_name,
+        "total_records_repointed": total_repointed,
+        "repoint_details": repoint_counts,
+        "source_status": "inactive",
+    })
+
+
 # ---------------------------------------------------------------------------
 # Action Router
 # ---------------------------------------------------------------------------
@@ -798,4 +914,6 @@ ACTIONS = {
     "health-add-patient-contact": add_patient_contact,
     "health-update-patient-contact": update_patient_contact,
     "health-add-consent": add_consent,
+    # H42: Patient Merge
+    "health-merge-patients": merge_patients,
 }
