@@ -67,7 +67,7 @@ class TestAddPatient:
             last_name="Smith",
             date_of_birth="1990-06-20",
             gender="male",
-            ssn="123-45-6789",
+            ssn="123-45-6789",  # fake test fixture for SEC-03
             marital_status="single",
             race=None,
             ethnicity="not_hispanic_latino",

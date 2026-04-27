@@ -30,8 +30,8 @@ os.environ["ERPCLAW_FIELD_KEY"] = "test-key-for-unit-tests"
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 MODULE_DIR = os.path.dirname(TESTS_DIR)                    # scripts/
 ROOT_DIR = os.path.dirname(MODULE_DIR)                     # healthclaw-mental/
-PARENT_DIR = os.path.dirname(ROOT_DIR)                     # src/healthclaw/
-SRC_DIR = os.path.dirname(PARENT_DIR)                      # src/
+PARENT_DIR = os.path.dirname(ROOT_DIR)                     # source/healthclaw/
+SRC_DIR = os.path.dirname(PARENT_DIR)                      # source/
 
 # Foundation schema init
 SETUP_DIR = os.path.join(SRC_DIR, "erpclaw", "scripts", "erpclaw-setup")
