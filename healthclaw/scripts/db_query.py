@@ -527,7 +527,6 @@ def main():
     parser.add_argument("--issuing-authority")
     parser.add_argument("--issue-date")
     parser.add_argument("--verification-date")
-    parser.add_argument("--verified-by")
     # H20: Payer Enrollment
     parser.add_argument("--enrollment-status")
     parser.add_argument("--revalidation-date")

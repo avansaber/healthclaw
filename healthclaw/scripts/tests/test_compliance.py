@@ -227,13 +227,18 @@ class TestPHIAccess:
     def test_phi_access_anomaly_after_hours(self, conn, env):
         """Access outside 6am-10pm should be flagged."""
         import uuid as _uuid_mod
-        # Insert access at 3am UTC
+        from datetime import datetime, timezone, timedelta
+        # Insert access at 3am UTC, 1 day ago (within the 30-day lookback window).
+        # Use a dynamic timestamp so the test does not age out of the window.
+        night_dt = (datetime.now(timezone.utc) - timedelta(days=1)).replace(
+            hour=3, minute=0, second=0, microsecond=0
+        )
+        night_ts = night_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         conn.execute(
             """INSERT INTO healthclaw_phi_access_log
                (id, user_id, patient_id, access_type, data_category, created_at)
                VALUES (?, ?, ?, 'view', 'clinical', ?)""",
-            (str(_uuid_mod.uuid4()), "night-user", env["patient_id"],
-             "2026-03-20T03:00:00Z")
+            (str(_uuid_mod.uuid4()), "night-user", env["patient_id"], night_ts)
         )
         conn.commit()
 
