@@ -5,6 +5,7 @@ Imported by db_query.py (unified router).
 """
 import json
 import os
+import sqlite3
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -705,7 +706,9 @@ def scrub_claim(conn, args):
     rendering_provider_id = claim.get("rendering_provider_id")
     if rendering_provider_id:
         npi = None
-        # Check if employee table has an npi column (SQLite treats missing columns as string literals)
+        # Narrow except: tolerate the employee table not existing (older schemas)
+        # but let real query errors propagate. A broad swallow here previously
+        # made schema bugs indistinguishable from "no NPI on file" warnings.
         try:
             emp_cols = [r[1] for r in conn.execute("PRAGMA table_info(employee)").fetchall()]
             if "npi" in emp_cols:
@@ -715,7 +718,9 @@ def scrub_claim(conn, args):
                 ).fetchone()
                 if emp_row and emp_row[0]:
                     npi = emp_row[0]
-        except Exception:
+        except sqlite3.OperationalError:
+            # 'no such table: employee' on minimal installs — fall through to
+            # the "no NPI on file" warning below.
             pass
         if npi:
             if not _validate_npi(npi):
@@ -888,8 +893,8 @@ def _run_scrub(conn, claim_id):
                 ).fetchone()
                 if emp_row and emp_row[0]:
                     npi = emp_row[0]
-        except Exception:
-            pass
+        except sqlite3.OperationalError:
+            pass  # employee table not in this install — fall to "no NPI" warning
         if npi:
             if not _validate_npi(npi):
                 errors.append(f"Rendering provider NPI '{npi}' is invalid (Luhn check failed)")

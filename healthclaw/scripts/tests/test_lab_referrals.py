@@ -28,7 +28,6 @@ mod = load_db_query()
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestLabOrder:
-    @pytest.mark.xfail(reason="lab.py bug: uses 'status' column instead of 'order_status'")
     def test_add_lab_order(self, conn, env):
         result = call_action(mod.health_add_lab_order, conn, ns(
             company_id=env["company_id"],
@@ -70,7 +69,6 @@ class TestLabOrder:
         assert is_ok(result), result
         assert result["id"] == env["lab_order_id"]
 
-    @pytest.mark.xfail(reason="lab.py bug: uses 'status' column instead of 'order_status'")
     def test_update_lab_order(self, conn, env):
         result = call_action(mod.health_update_lab_order, conn, ns(
             lab_order_id=env["lab_order_id"],

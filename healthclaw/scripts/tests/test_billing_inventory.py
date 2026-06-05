@@ -101,7 +101,6 @@ class TestFeeSchedule:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestCharge:
-    @pytest.mark.xfail(reason="billing.py bug: uses 'status' column instead of 'charge_status'")
     def test_add_charge(self, conn, env):
         result = call_action(mod.health_add_charge, conn, ns(
             company_id=env["company_id"],
@@ -126,7 +125,6 @@ class TestCharge:
         assert is_ok(result), result
         assert "id" in result
 
-    @pytest.mark.xfail(reason="billing.py bug: uses 'status' column instead of 'charge_status'")
     def test_list_charges(self, conn, env):
         call_action(mod.health_add_charge, conn, ns(
             company_id=env["company_id"],
@@ -176,7 +174,6 @@ class TestClaim:
         ))
         return res["id"]
 
-    @pytest.mark.xfail(reason="billing.py bug: uses 'status' column instead of 'claim_status'")
     def test_add_claim(self, conn, env):
         ins_id = self._seed_insurance(conn, env)
         result = call_action(mod.health_add_claim, conn, ns(

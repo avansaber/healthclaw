@@ -100,7 +100,7 @@ def add_lab_order(conn, args):
     lab_order_id = str(uuid.uuid4())
     naming = get_next_name(conn, "healthclaw_lab_order", company_id=args.company_id)
     now = _now_iso()
-    sql, _ = insert_row("healthclaw_lab_order", {"id": P(), "naming_series": P(), "order_id": P(), "encounter_id": P(), "patient_id": P(), "ordering_provider_id": P(), "order_date": P(), "priority": P(), "fasting_required": P(), "clinical_indication": P(), "specimen_type": P(), "collection_date": P(), "received_date": P(), "status": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
+    sql, _ = insert_row("healthclaw_lab_order", {"id": P(), "naming_series": P(), "order_id": P(), "encounter_id": P(), "patient_id": P(), "ordering_provider_id": P(), "order_date": P(), "priority": P(), "fasting_required": P(), "clinical_indication": P(), "specimen_type": P(), "collection_date": P(), "received_date": P(), "order_status": P(), "notes": P(), "company_id": P(), "created_at": P(), "updated_at": P()})
 
     conn.execute(sql, (
         lab_order_id, naming, order_id, args.encounter_id, args.patient_id,
@@ -150,9 +150,9 @@ def update_lab_order(conn, args):
 
     lab_order_status = getattr(args, "lab_order_status", None)
     if lab_order_status is not None:
-        _validate_enum(lab_order_status, VALID_LAB_ORDER_STATUSES, "status")
-        data["status"] = lab_order_status
-        changed.append("status")
+        _validate_enum(lab_order_status, VALID_LAB_ORDER_STATUSES, "order_status")
+        data["order_status"] = lab_order_status
+        changed.append("order_status")
 
     if getattr(args, "fasting_required", None) is not None:
         data["fasting_required"] = 1 if args.fasting_required == "1" else 0
@@ -219,9 +219,9 @@ def list_lab_orders(conn, args):
 
     if getattr(args, "status", None):
 
-        q_count = q_count.where(t.status == P())
+        q_count = q_count.where(t.order_status == P())
 
-        q_rows = q_rows.where(t.status == P())
+        q_rows = q_rows.where(t.order_status == P())
 
         params.append(args.status)
 
