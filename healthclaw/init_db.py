@@ -16,7 +16,7 @@ import sys
 import uuid
 
 
-DEFAULT_DB_PATH = os.path.expanduser("~/.openclaw/erpclaw/data.sqlite")
+DEFAULT_DB_PATH = os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "data.sqlite")
 DISPLAY_NAME = "HealthClaw"
 
 # Foundation tables that must exist before HealthClaw can install
