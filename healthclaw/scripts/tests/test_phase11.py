@@ -633,6 +633,67 @@ class TestMisc:
         rule_types = [r["rule_type"] for r in result["rules"]]
         assert "buffer_time" in rule_types
 
+    def test_add_scheduling_rule(self, conn, env):
+        result = call_action(mod.health_add_scheduling_rule, conn, ns(
+            company_id=env["company_id"],
+            rule_name="Buffer between visits",
+            rule_type="buffer_time",
+            rule_value="20",
+            provider_id=None,
+            limit=50, offset=0,
+        ))
+        assert is_ok(result), result
+        assert result["rule_type"] == "buffer_time"
+        assert result["rule_value"] == "20"
+        assert result["rule_status"] == "active"
+
+    def test_online_scheduling_rules_returns_stored(self, conn, env):
+        # Once a rule is stored, the reader returns it INSTEAD of defaults.
+        call_action(mod.health_add_scheduling_rule, conn, ns(
+            company_id=env["company_id"],
+            rule_name="Max per day",
+            rule_type="max_per_day",
+            rule_value="12",
+            provider_id=None,
+            limit=50, offset=0,
+        ))
+        result = call_action(mod.health_online_scheduling_rules, conn, ns(
+            company_id=env["company_id"], limit=50, offset=0,
+        ))
+        assert is_ok(result), result
+        assert result["rule_count"] == 1
+        assert result["rules"][0]["rule_type"] == "max_per_day"
+        assert result["rules"][0]["rule_value"] == "12"
+
+    def test_list_scheduling_rules(self, conn, env):
+        call_action(mod.health_add_scheduling_rule, conn, ns(
+            company_id=env["company_id"],
+            rule_name="Advance booking window",
+            rule_type="advance_booking_days",
+            rule_value="60",
+            provider_id=None,
+            limit=50, offset=0,
+        ))
+        result = call_action(mod.health_list_scheduling_rules, conn, ns(
+            company_id=env["company_id"],
+            rule_type=None, status=None, limit=50, offset=0,
+        ))
+        assert is_ok(result), result
+        assert result["total_count"] == 1
+        assert result["rows"][0]["rule_type"] == "advance_booking_days"
+        assert result["rows"][0]["rule_value"] == "60"
+
+    def test_invalid_rule_type_rejected(self, conn, env):
+        result = call_action(mod.health_add_scheduling_rule, conn, ns(
+            company_id=env["company_id"],
+            rule_name="Bad rule",
+            rule_type="nonsense",
+            rule_value="1",
+            provider_id=None,
+            limit=50, offset=0,
+        ))
+        assert is_error(result)
+
     def test_growth_chart(self, conn, env):
         result = call_action(mod.health_growth_chart, conn, ns(
             age_months="12",

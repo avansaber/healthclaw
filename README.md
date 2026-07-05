@@ -1,11 +1,11 @@
 # HealthClaw
 
-Healthcare management suite for [ERPClaw](https://github.com/avansaber/erpclaw). <!-- SYNC:value:group.healthclaw.module_count -->5<!-- /SYNC --> modules covering clinical practice management, dental, veterinary, mental health, and home health. <!-- SYNC:value:group.healthclaw.total_actions -->280<!-- /SYNC --> actions total with HIPAA-friendly architecture.
+Healthcare management suite for [ERPClaw](https://github.com/avansaber/erpclaw). <!-- SYNC:value:group.healthclaw.module_count -->5<!-- /SYNC --> modules covering clinical practice management, dental, veterinary, mental health, and home health. <!-- SYNC:value:group.healthclaw.total_actions -->284<!-- /SYNC --> actions total with HIPAA-friendly architecture.
 
 ## Modules
 
 ### Core (`healthclaw`)
-Hospital and multi-department healthcare ERP. <!-- SYNC:value:module.healthclaw.actions -->230<!-- /SYNC --> actions across 11 domains -- patients, appointments, clinical documentation, billing, inventory, lab, referrals, pharmacy, advanced lab, advanced billing, and advanced reports. ICD-10/CPT coding, insurance claims, prior authorization, pharmacy/DEA compliance, and full clinical documentation.
+Hospital and multi-department healthcare ERP. <!-- SYNC:value:module.healthclaw.actions -->234<!-- /SYNC --> actions across 11 domains -- patients, appointments, clinical documentation, billing, inventory, lab, referrals, pharmacy, advanced lab, advanced billing, and advanced reports. ICD-10/CPT coding, insurance claims, prior authorization, pharmacy/DEA compliance, and full clinical documentation.
 
 ### Dental (`healthclaw-dental`)
 Tooth charts, CDT-coded procedures, multi-phase treatment plans, and periodontal charting with trend comparison.

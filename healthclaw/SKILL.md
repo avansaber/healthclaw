@@ -1,7 +1,7 @@
 ---
 name: healthclaw
-version: 2.0.0
-description: AI-native healthcare ERP. 230 actions across 15 domains -- patients, appointments, clinical, billing, inventory, lab, referrals, advanced pharmacy, advanced lab, advanced billing, advanced reports, RCM, compliance, provider management, reports v2. HIPAA-friendly, ICD-10/CPT, insurance claims, prior auth, pharmacy/DEA, revenue cycle management.
+version: 2.1.0
+description: AI-native healthcare ERP. 234 actions across 15 domains -- patients, appointments, clinical, billing, inventory, lab, referrals, advanced pharmacy, advanced lab, advanced billing, advanced reports, RCM, compliance, provider management, reports v2. HIPAA-friendly, ICD-10/CPT, insurance claims, prior auth, pharmacy/DEA, revenue cycle management.
 author: AvanSaber
 homepage: https://github.com/avansaber/healthclaw
 source: https://github.com/avansaber/healthclaw
@@ -50,7 +50,7 @@ python3 {baseDir}/scripts/db_query.py --action status
 --action health-submit-claim --claim-id {id}
 ```
 
-## All 230 Actions
+## All 234 Actions
 
 | Action | Description |
 |--------|-------------|
@@ -94,7 +94,9 @@ python3 {baseDir}/scripts/db_query.py --action status
 | `health-create-recurring-appointment` | Create recurring appointment series |
 | `health-list-recurring-series` | List recurring appointment series |
 | `health-schedule-multi-resource` | Schedule multi-resource appointment |
-| `health-online-scheduling-rules` | Configure online scheduling rules |
+| `health-online-scheduling-rules` | View online scheduling rules (defaults if none set) |
+| `health-add-scheduling-rule` | Configure an online scheduling rule |
+| `health-list-scheduling-rules` | List stored scheduling rules |
 | `health-add-reminder` | Add appointment reminder |
 | `health-list-reminders` | List reminders |
 | `health-process-reminders` | Process pending reminders |
@@ -206,7 +208,9 @@ python3 {baseDir}/scripts/db_query.py --action status
 | `health-refill-prescription` | Refill prescription |
 | `health-add-dispense-log` | Log dispensing event |
 | `health-list-dispense-logs` | List dispense logs |
-| `health-check-drug-interaction` | Check drug interactions |
+| `health-check-drug-interaction` | Check interactions vs company's configured pairs; not-configured when none loaded |
+| `health-add-drug-interaction` | Load a drug-interaction reference pair |
+| `health-list-drug-interactions` | List configured drug-interaction pairs |
 | `health-adv-add-lab-test` | Add lab test to catalog |
 | `health-adv-list-lab-tests` | List lab test catalog |
 | `health-adv-add-lab-order` | Create advanced lab order |
@@ -282,8 +286,7 @@ python3 {baseDir}/scripts/db_query.py --action status
 | `health-provider-productivity-report` | Provider productivity |
 | `health-provider-credential-report` | Provider credential status |
 | `health-breach-summary-report` | HIPAA breach summary |
-| `health-mips-performance-dashboard` | MIPS performance dashboard |
-| `health-mips-submission-report` | MIPS submission report |
+| `health-mips-performance-dashboard` / `health-mips-submission-report` | MIPS performance dashboard + submission report |
 
 ## Key Concepts
 - **Patient = Customer**, Provider = Employee. Encounter = clinical hub for vitals/diagnoses/prescriptions/procedures/notes.

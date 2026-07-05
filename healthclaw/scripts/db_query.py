@@ -419,6 +419,8 @@ def main():
 
     # ── ADV_PHARMACY domain (healthclaw-advanced) ─────────────
     parser.add_argument("--medication-id")
+    parser.add_argument("--medication-a-id")
+    parser.add_argument("--medication-b-id")
     parser.add_argument("--name")
     parser.add_argument("--dea-schedule")
     parser.add_argument("--manufacturer")
@@ -599,6 +601,10 @@ def main():
     parser.add_argument("--remediation")
     # H38: Consent Template versioning
     parser.add_argument("--version")
+    # H39: Scheduling Rules (online scheduling config writer)
+    parser.add_argument("--rule-name")
+    parser.add_argument("--rule-type")
+    parser.add_argument("--rule-value")
     # H44: Growth Chart
     parser.add_argument("--age-months")
 

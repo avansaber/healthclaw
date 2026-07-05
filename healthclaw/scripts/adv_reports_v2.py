@@ -539,6 +539,66 @@ def lab_interface_status(conn, args):
 # H39: Online Scheduling Rules
 # ===========================================================================
 
+VALID_SCHEDULING_RULE_TYPES = (
+    "buffer_time", "max_per_day", "advance_booking_days",
+    "cancellation_hours", "appointment_types_allowed",
+)
+
+
+def add_scheduling_rule(conn, args):
+    """Persist an online-scheduling rule so the reader returns real config
+    instead of built-in defaults."""
+    _validate_company(conn, args.company_id)
+
+    rule_name = getattr(args, "rule_name", None)
+    if not rule_name:
+        err("--rule-name is required")
+    rule_type = getattr(args, "rule_type", None)
+    if not rule_type:
+        err("--rule-type is required")
+    if rule_type not in VALID_SCHEDULING_RULE_TYPES:
+        err(f"Invalid rule_type: {rule_type}. Must be one of: {', '.join(VALID_SCHEDULING_RULE_TYPES)}")
+    rule_value = getattr(args, "rule_value", None)
+    if rule_value is None or rule_value == "":
+        err("--rule-value is required")
+
+    rule_id = str(uuid.uuid4())
+    sql, _ = insert_row("healthclaw_scheduling_rule", {"id": P(), "rule_name": P(), "rule_type": P(), "rule_value": P(), "provider_id": P(), "company_id": P(), "status": P(), "created_at": P()})
+    conn.execute(sql,
+        (rule_id, rule_name, rule_type, str(rule_value),
+         getattr(args, "provider_id", None), args.company_id, "active", _now_iso())
+    )
+    audit(conn, "healthclaw_scheduling_rule", rule_id, "health-add-scheduling-rule", args.company_id)
+    conn.commit()
+    ok({"id": rule_id, "rule_name": rule_name, "rule_type": rule_type,
+        "rule_value": str(rule_value), "rule_status": "active"})
+
+
+def list_scheduling_rules(conn, args):
+    """List stored scheduling rules for a company (raw config, no defaults)."""
+    _validate_company(conn, args.company_id)
+
+    t = Table("healthclaw_scheduling_rule")
+    q_count = Q.from_(t).select(fn.Count("*")).where(t.company_id == P())
+    q_rows = Q.from_(t).select(t.star).where(t.company_id == P())
+    params = [args.company_id]
+
+    rule_type = getattr(args, "rule_type", None)
+    if rule_type:
+        q_count = q_count.where(t.rule_type == P()); q_rows = q_rows.where(t.rule_type == P()); params.append(rule_type)
+    status = getattr(args, "status", None)
+    if status:
+        q_count = q_count.where(t.status == P()); q_rows = q_rows.where(t.status == P()); params.append(status)
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    limit = getattr(args, "limit", None) or 50
+    offset = getattr(args, "offset", None) or 0
+    q_rows = q_rows.orderby(t.rule_type, order=Order.asc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [limit, offset]).fetchall()
+    ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
+        "limit": limit, "offset": offset, "has_more": (offset + limit) < total})
+
+
 def online_scheduling_rules(conn, args):
     """Return scheduling policy info / rules."""
     _validate_company(conn, args.company_id)
@@ -644,5 +704,7 @@ ACTIONS = {
     "health-lab-interface-status": lab_interface_status,
     # H39-44: Misc
     "health-online-scheduling-rules": online_scheduling_rules,
+    "health-add-scheduling-rule": add_scheduling_rule,
+    "health-list-scheduling-rules": list_scheduling_rules,
     "health-growth-chart": growth_chart,
 }

@@ -27,6 +27,7 @@ ENTITY_PREFIXES.setdefault("healthclaw_dispense_log", "DISP-")
 VALID_DEA_SCHEDULES = ("I", "II", "III", "IV", "V", "non-scheduled")
 VALID_RX_STATUSES = ("active", "filled", "partially_filled", "expired", "cancelled")
 VALID_CS_LOG_TYPES = ("received", "dispensed", "destroyed", "returned", "adjusted")
+VALID_INTERACTION_SEVERITIES = ("minor", "moderate", "major", "contraindicated")
 
 
 # ---- Helpers -----------------------------------------------------------------
@@ -468,8 +469,38 @@ def check_drug_interaction(conn, args):
     med_id = getattr(args, "medication_id", None)
     if not med_id:
         err("--medication-id is required")
-    if not conn.execute(Q.from_(Table("healthclaw_medication")).select(Field("id")).where(Field("id") == P()).get_sql(), (med_id,)).fetchone():
+    # Resolve the medication AND its owning company — the reference table and the
+    # match query are BOTH company-scoped, so one clinic's interaction pairs can
+    # never flip another clinic's result from "not configured" to a false clean.
+    med_row = conn.execute(
+        Q.from_(Table("healthclaw_medication")).select(Field("id"), Field("company_id"))
+        .where(Field("id") == P()).get_sql(),
+        (med_id,)
+    ).fetchone()
+    if not med_row:
         err(f"Medication {med_id} not found")
+    company_id = med_row[1]
+
+    # Honesty gate: a zero result means nothing until reference data is loaded FOR
+    # THIS COMPANY. An empty reference table must NOT read as an authoritative
+    # "no interactions" safety clearance (clinical false-negative).
+    reference_pair_count = conn.execute(
+        "SELECT COUNT(*) FROM healthclaw_drug_interaction WHERE company_id = ?",
+        (company_id,)
+    ).fetchone()[0]
+    if reference_pair_count == 0:
+        ok({
+            "medication_id": med_id,
+            "company_id": company_id,
+            "feature_status": "not_configured",
+            "message": ("No drug-interaction reference data is loaded for this "
+                        "company, so this result is NOT an authoritative safety "
+                        "clearance. Load interaction pairs via "
+                        "health-add-drug-interaction before relying on this check."),
+            "reference_pair_count": 0,
+            "interaction_count": 0,
+            "interactions": [],
+        })
 
     # PyPika: skipped — complex multi-JOIN with CASE ORDER BY
     rows = conn.execute(
@@ -477,11 +508,11 @@ def check_drug_interaction(conn, args):
            FROM healthclaw_drug_interaction di
            JOIN healthclaw_medication ma ON di.medication_a_id = ma.id
            JOIN healthclaw_medication mb ON di.medication_b_id = mb.id
-           WHERE di.medication_a_id = ? OR di.medication_b_id = ?
+           WHERE di.company_id = ? AND (di.medication_a_id = ? OR di.medication_b_id = ?)
            ORDER BY CASE di.severity
                WHEN 'contraindicated' THEN 1 WHEN 'major' THEN 2
                WHEN 'moderate' THEN 3 WHEN 'minor' THEN 4 END""",
-        (med_id, med_id)
+        (company_id, med_id, med_id)
     ).fetchall()
     interactions = []
     for r in rows:
@@ -495,8 +526,82 @@ def check_drug_interaction(conn, args):
             d["interacting_medication_id"] = d["medication_a_id"]
         interactions.append(d)
 
-    ok({"medication_id": med_id, "interaction_count": len(interactions),
-        "interactions": interactions})
+    ok({
+        "medication_id": med_id,
+        "company_id": company_id,
+        "feature_status": "active",
+        "reference_pair_count": reference_pair_count,
+        "interaction_count": len(interactions),
+        "interactions": interactions,
+        "scope_note": (f"Checked against {reference_pair_count} configured "
+                       "interaction pair(s) for this company. A zero result means "
+                       "none of them involve this medication, not that the "
+                       "medication is universally interaction-free."),
+    })
+
+
+# ---------------------------------------------------------------------------
+# 12b. add-drug-interaction (bring-your-own reference-pair writer)
+# ---------------------------------------------------------------------------
+def add_drug_interaction(conn, args):
+    for req in ("company_id", "medication_a_id", "medication_b_id", "description"):
+        if not getattr(args, req, None):
+            err(f"--{req.replace('_', '-')} is required")
+
+    if args.medication_a_id == args.medication_b_id:
+        err("--medication-a-id and --medication-b-id must be different medications")
+
+    severity = getattr(args, "severity", None) or "moderate"
+    _validate_enum(severity, VALID_INTERACTION_SEVERITIES, "health-interaction-severity")
+
+    # Both medications must exist AND belong to this company — an interaction pair
+    # is company-scoped reference data; cross-company references are refused.
+    for mid in (args.medication_a_id, args.medication_b_id):
+        if not conn.execute(
+            Q.from_(Table("healthclaw_medication")).select(Field("id"))
+            .where((Field("id") == P()) & (Field("company_id") == P())).get_sql(),
+            (mid, args.company_id)
+        ).fetchone():
+            err(f"Medication {mid} not found for company {args.company_id}")
+
+    di_id = str(uuid.uuid4())
+    _ts = _now_iso()
+    sql, _ = insert_row("healthclaw_drug_interaction", {"id": P(), "company_id": P(), "medication_a_id": P(), "medication_b_id": P(), "severity": P(), "description": P(), "recommendation": P(), "created_at": P()})
+    conn.execute(sql,
+        (di_id, args.company_id, args.medication_a_id, args.medication_b_id,
+         severity, args.description, getattr(args, "recommendation", None), _ts)
+    )
+    audit(conn, "healthclaw_drug_interaction", di_id, "health-add-drug-interaction", args.company_id)
+    conn.commit()
+    ok({"id": di_id, "company_id": args.company_id,
+        "medication_a_id": args.medication_a_id,
+        "medication_b_id": args.medication_b_id, "severity": severity})
+
+
+# ---------------------------------------------------------------------------
+# 12c. list-drug-interactions
+# ---------------------------------------------------------------------------
+def list_drug_interactions(conn, args):
+    t = Table("healthclaw_drug_interaction")
+    q_count = Q.from_(t).select(fn.Count("*"))
+    q_rows = Q.from_(t).select(t.star)
+    params = []
+
+    if getattr(args, "company_id", None):
+        q_count = q_count.where(t.company_id == P()); q_rows = q_rows.where(t.company_id == P()); params.append(args.company_id)
+    med_id = getattr(args, "medication_id", None)
+    if med_id:
+        crit = LiteralValue('("medication_a_id" = ? OR "medication_b_id" = ?)')
+        q_count = q_count.where(crit); q_rows = q_rows.where(crit)
+        params.extend([med_id, med_id])
+
+    total = conn.execute(q_count.get_sql(), params).fetchone()[0]
+    limit = getattr(args, "limit", None) or 50
+    offset = getattr(args, "offset", None) or 0
+    q_rows = q_rows.orderby(t.created_at, order=Order.desc).limit(P()).offset(P())
+    rows = conn.execute(q_rows.get_sql(), params + [limit, offset]).fetchall()
+    ok({"rows": [row_to_dict(r) for r in rows], "total_count": total,
+        "limit": limit, "offset": offset, "has_more": (offset + limit) < total})
 
 
 # ---------------------------------------------------------------------------
@@ -604,6 +709,8 @@ ACTIONS = {
     "health-add-dispense-log": add_dispense_log,
     "health-list-dispense-logs": list_dispense_logs,
     "health-check-drug-interaction": check_drug_interaction,
+    "health-add-drug-interaction": add_drug_interaction,
+    "health-list-drug-interactions": list_drug_interactions,
     "health-medication-inventory-report": medication_inventory_report,
     "health-controlled-substance-report": controlled_substance_report,
 }
