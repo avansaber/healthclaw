@@ -11,13 +11,15 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 try:
-    sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.db import get_connection
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, dynamic_update, update_row
+    from erpclaw_lib.query import Field, Order, P, Q, Table, dynamic_update, fn, insert_row, now as sql_now, update_row
 
     # Register HealthClaw naming prefixes (lab domain)
     ENTITY_PREFIXES.setdefault("healthclaw_lab_order", "LAB-")
@@ -161,7 +163,7 @@ def update_lab_order(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_lab_order", data, {"id": lab_order_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_lab_order", lab_order_id, "health-update-lab-order", None, {"updated_fields": changed})
@@ -535,7 +537,7 @@ def update_imaging_order(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_imaging_order", data, {"id": img_order_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_imaging_order", img_order_id, "health-update-imaging-order", None, {"updated_fields": changed})
@@ -681,7 +683,7 @@ def update_imaging_result(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_imaging_result", data, {"id": ir_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_imaging_result", ir_id, "health-update-imaging-result", None, {"updated_fields": changed})

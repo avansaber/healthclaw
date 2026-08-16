@@ -11,13 +11,15 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 try:
-    sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.db import get_connection
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, dynamic_update, update_row
+    from erpclaw_lib.query import Field, Order, P, Q, Table, dynamic_update, fn, insert_row, now as sql_now, update_row
 
     # Register HealthClaw naming prefixes (RCM domain)
     ENTITY_PREFIXES.setdefault("healthclaw_payer", "PAYER-")
@@ -182,7 +184,7 @@ def update_payer(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_payer", data, {"id": payer_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_payer", payer_id, "health-update-payer", None, {"updated_fields": changed})
@@ -265,7 +267,7 @@ def link_payer_fee_schedule(conn, args):
 
     data = {
         "default_fee_schedule_id": fee_schedule_id,
-        "updated_at": LiteralValue("datetime('now')"),
+        "updated_at": sql_now(),
     }
     sql, params = dynamic_update("healthclaw_payer", data, {"id": payer_id})
     conn.execute(sql, params)
@@ -831,7 +833,7 @@ def auto_post_era(conn, args):
             upd_data = {
                 "total_paid": str(round_currency(new_total_paid)),
                 "claim_status": new_status,
-                "updated_at": LiteralValue("datetime('now')"),
+                "updated_at": sql_now(),
             }
             upd_sql, upd_params = dynamic_update("healthclaw_claim", upd_data, {"id": claim_id})
             conn.execute(upd_sql, upd_params)

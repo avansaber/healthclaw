@@ -12,13 +12,15 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 try:
-    sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.db import get_connection
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, dynamic_update, update_row
+    from erpclaw_lib.query import Field, LiteralValue, Order, P, Q, Table, dynamic_update, fn, insert_row, now as sql_now, update_row
 
     # Register HealthClaw naming prefixes (billing domain)
     ENTITY_PREFIXES.setdefault("healthclaw_charge", "CHG-")
@@ -136,7 +138,7 @@ def update_fee_schedule(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_fee_schedule", data, {"id": fs_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_fee_schedule", fs_id, "health-update-fee-schedule", None, {"updated_fields": changed})
@@ -513,7 +515,7 @@ def update_claim(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_claim", data, {"id": claim_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_claim", claim_id, "health-update-claim", None, {"updated_fields": changed})
@@ -927,7 +929,7 @@ def submit_claim(conn, args):
         err("Cannot submit claim with no claim lines. Add at least one claim line first.")
 
     sql = update_row("healthclaw_claim",
-        data={"claim_status": "submitted", "updated_at": LiteralValue("datetime('now')")},
+        data={"claim_status": "submitted", "updated_at": sql_now()},
         where={"id": P()})
     conn.execute(sql, (claim_id,))
     audit(conn, "healthclaw_claim", claim_id, "health-submit-claim", None)
@@ -1170,7 +1172,7 @@ def record_denial(conn, args):
         "denial_category": denial_category,
         "denial_code": denial_code,
         "denial_date": denial_date,
-        "updated_at": LiteralValue("datetime('now')"),
+        "updated_at": sql_now(),
     }
     if denial_reason:
         data["denial_reason"] = denial_reason
@@ -1209,7 +1211,7 @@ def submit_appeal(conn, args):
         "claim_status": "appealed",
         "appeal_submitted_date": now[:10],
         "appeal_outcome": "pending",
-        "updated_at": LiteralValue("datetime('now')"),
+        "updated_at": sql_now(),
     }
     if appeal_method:
         data["appeal_method"] = appeal_method
@@ -1258,7 +1260,7 @@ def resolve_appeal(conn, args):
         "claim_status": new_status,
         "appeal_outcome": appeal_outcome,
         "appeal_resolved_date": now[:10],
-        "updated_at": LiteralValue("datetime('now')"),
+        "updated_at": sql_now(),
     }
     if appeal_amount_recovered:
         data["appeal_amount_recovered"] = str(round_currency(to_decimal(appeal_amount_recovered)))

@@ -10,12 +10,14 @@ import uuid
 from datetime import datetime, timezone
 
 try:
-    sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.db import get_connection
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, dynamic_update, update_row
+    from erpclaw_lib.query import Field, Order, P, Q, Table, dynamic_update, fn, insert_row, now as sql_now, update_row
 
     # Register naming prefixes
     ENTITY_PREFIXES.setdefault("healthclaw_encounter", "ENC-")
@@ -143,7 +145,7 @@ def update_encounter(conn, args):
 
     if not data:
         err("No fields to update")
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_encounter", data, {"id": enc_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_encounter", enc_id, "health-update-encounter", None, {"updated_fields": changed})
@@ -310,7 +312,7 @@ def update_diagnosis(conn, args):
 
     if not data:
         err("No fields to update")
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_diagnosis", data, {"id": dx_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_diagnosis", dx_id, "health-update-diagnosis", getattr(args, "company_id", None))
@@ -421,7 +423,7 @@ def update_prescription(conn, args):
 
     if not data:
         err("No fields to update")
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_prescription", data, {"id": rx_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_prescription", rx_id, "health-update-prescription", getattr(args, "company_id", None))
@@ -576,7 +578,7 @@ def update_clinical_note(conn, args):
 
     if not data:
         err("No fields to update")
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_clinical_note", data, {"id": note_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_clinical_note", note_id, "health-update-clinical-note", getattr(args, "company_id", None))

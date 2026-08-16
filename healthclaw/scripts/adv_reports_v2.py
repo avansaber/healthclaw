@@ -16,12 +16,14 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 try:
-    sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.db import get_connection
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, dynamic_update, update_row
+    from erpclaw_lib.query import Field, Order, P, Q, Table, dynamic_update, fn, insert_row, now as sql_now, update_row
 except ImportError:
     pass
 
@@ -236,7 +238,7 @@ def batch_submit_claims(conn, args):
 
         # Submit
         sql = update_row("healthclaw_claim",
-            data={"claim_status": "submitted", "updated_at": LiteralValue("datetime('now')")},
+            data={"claim_status": "submitted", "updated_at": sql_now()},
             where={"id": P()})
         conn.execute(sql, (claim_id,))
         audit(conn, "healthclaw_claim", claim_id, "health-batch-submit-claims", args.company_id)

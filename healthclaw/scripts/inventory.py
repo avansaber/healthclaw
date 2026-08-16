@@ -11,13 +11,15 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 try:
-    sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.db import get_connection
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, dynamic_update, update_row
+    from erpclaw_lib.query import Field, Order, P, Q, Table, dynamic_update, fn, insert_row, now as sql_now, update_row
 
     # Register HealthClaw naming prefixes (inventory domain)
     ENTITY_PREFIXES.setdefault("healthclaw_dispensing", "DISP-")
@@ -116,7 +118,7 @@ def update_formulary(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_formulary", data, {"id": formulary_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_formulary", formulary_id, "health-update-formulary", None, {"updated_fields": changed})
@@ -261,7 +263,7 @@ def update_formulary_item(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_formulary_item", data, {"id": fi_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_formulary_item", fi_id, "health-update-formulary-item", None, {"updated_fields": changed})
@@ -457,7 +459,7 @@ def cancel_dispensing(conn, args):
         err(f"Cannot void dispensing with status '{row[0]}'. Must be 'dispensed'.")
 
     sql = update_row("healthclaw_dispensing",
-        data={"status": "voided", "updated_at": LiteralValue("datetime('now')")},
+        data={"status": "voided", "updated_at": sql_now()},
         where={"id": P()})
     conn.execute(sql, (disp_id,))
     audit(conn, "healthclaw_dispensing", disp_id, "health-cancel-dispensing", None)

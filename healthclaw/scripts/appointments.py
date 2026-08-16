@@ -10,12 +10,14 @@ import uuid
 from datetime import datetime, timezone
 
 try:
-    sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.db import get_connection
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, dynamic_update, update_row
+    from erpclaw_lib.query import Field, LiteralValue, Order, P, Q, Table, dynamic_update, fn, insert_row, now as sql_now, update_row
 
     # Register naming prefixes
     ENTITY_PREFIXES.setdefault("healthclaw_appointment", "APPT-")
@@ -122,7 +124,7 @@ def update_provider_schedule(conn, args):
 
     if not data:
         err("No fields to update")
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_provider_schedule", data, {"id": sched_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_provider_schedule", sched_id, "health-update-provider-schedule", getattr(args, "company_id", None))
@@ -279,7 +281,7 @@ def update_appointment(conn, args):
 
     if not data:
         err("No fields to update")
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_appointment", data, {"id": appt_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_appointment", appt_id, "health-update-appointment", None, {"updated_fields": changed})
@@ -369,7 +371,7 @@ def check_in_appointment(conn, args):
 
     now = _now_iso()
     sql = update_row("healthclaw_appointment",
-        data={"status": "checked_in", "check_in_time": P(), "updated_at": LiteralValue("datetime('now')")},
+        data={"status": "checked_in", "check_in_time": P(), "updated_at": sql_now()},
         where={"id": P()})
     conn.execute(sql, (now, appt_id))
     audit(conn, "healthclaw_appointment", appt_id, "health-check-in-appointment", None)
@@ -392,7 +394,7 @@ def check_out_appointment(conn, args):
 
     now = _now_iso()
     sql = update_row("healthclaw_appointment",
-        data={"status": "completed", "check_out_time": P(), "updated_at": LiteralValue("datetime('now')")},
+        data={"status": "completed", "check_out_time": P(), "updated_at": sql_now()},
         where={"id": P()})
     conn.execute(sql, (now, appt_id))
     audit(conn, "healthclaw_appointment", appt_id, "health-check-out-appointment", None)
@@ -414,7 +416,7 @@ def cancel_appointment(conn, args):
         err(f"Cannot cancel appointment with status '{row[0]}'.")
 
     sql = update_row("healthclaw_appointment",
-        data={"status": "cancelled", "cancellation_reason": P(), "updated_at": LiteralValue("datetime('now')")},
+        data={"status": "cancelled", "cancellation_reason": P(), "updated_at": sql_now()},
         where={"id": P()})
     conn.execute(sql, (getattr(args, "cancellation_reason", None), appt_id))
     audit(conn, "healthclaw_appointment", appt_id, "health-cancel-appointment", None)

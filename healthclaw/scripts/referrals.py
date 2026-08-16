@@ -11,13 +11,15 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 try:
-    sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.db import get_connection
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, dynamic_update
+    from erpclaw_lib.query import Field, Order, P, Q, Table, dynamic_update, fn, insert_row, now as sql_now
 
     # Register HealthClaw naming prefixes (referrals domain)
     ENTITY_PREFIXES.setdefault("healthclaw_referral", "REF-")
@@ -199,7 +201,7 @@ def update_referral(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_referral", data, {"id": ref_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_referral", ref_id, "health-update-referral", None, {"updated_fields": changed})
@@ -414,7 +416,7 @@ def update_prior_auth(conn, args):
     if not data:
         err("No fields to update")
 
-    data["updated_at"] = LiteralValue("datetime('now')")
+    data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_prior_auth", data, {"id": auth_id})
     conn.execute(sql, params)
     audit(conn, "healthclaw_prior_auth", auth_id, "health-update-prior-auth", None, {"updated_fields": changed})

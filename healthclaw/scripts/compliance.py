@@ -12,13 +12,15 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 try:
-    sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
+    import importlib.util
+    if importlib.util.find_spec("erpclaw_lib") is None:
+        sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.db import get_connection
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, LiteralValue, dynamic_update, update_row
+    from erpclaw_lib.query import Field, LiteralValue, Order, P, Q, Table, dynamic_update, fn, insert_row, now as sql_now, update_row
 
     # Register HealthClaw naming prefixes (compliance domain)
     ENTITY_PREFIXES.setdefault("healthclaw_good_faith_estimate", "GFE-")
@@ -499,7 +501,7 @@ def provide_good_faith_estimate(conn, args):
     data = {
         "status": "provided",
         "provided_at": now,
-        "updated_at": LiteralValue("datetime('now')"),
+        "updated_at": sql_now(),
     }
     sql, params = dynamic_update("healthclaw_good_faith_estimate", data, {"id": estimate_id})
     conn.execute(sql, params)
