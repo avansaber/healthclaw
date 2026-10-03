@@ -16,6 +16,7 @@ try:
     if importlib.util.find_spec("erpclaw_lib") is None:
         sys.path.insert(0, os.path.join(os.path.expanduser(os.environ.get("ERPCLAW_HOME", "~/.openclaw/erpclaw")), "lib"))
     from erpclaw_lib.db import get_connection
+    from erpclaw_lib.dependencies import table_exists
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.naming import get_next_name, ENTITY_PREFIXES
     from erpclaw_lib.response import ok, err, row_to_dict
@@ -69,6 +70,8 @@ def _mask_ssn_in_row(data):
     return data
 
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+SKILL = "healthclaw"
 
 # ---------------------------------------------------------------------------
 # Validation constants
@@ -182,7 +185,7 @@ def add_patient(conn, args):
         getattr(args, "notes", None),
         args.company_id, _ts, _ts,
     ))
-    audit(conn, "healthclaw_patient", patient_id, "health-add-patient", args.company_id)
+    audit(conn, SKILL, "health-add-patient", "healthclaw_patient", patient_id)
     conn.commit()
     ok({"id": patient_id, "naming_series": mrn, "full_name": full_name, "mrn": mrn})
 
@@ -279,7 +282,7 @@ def update_patient(conn, args):
 
     sql, params = dynamic_update("healthclaw_patient", data, {"id": args.patient_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_patient", args.patient_id, "health-update-patient", None, {"updated_fields": changed})
+    audit(conn, SKILL, "health-update-patient", "healthclaw_patient", args.patient_id, new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": args.patient_id, "updated_fields": changed})
 
@@ -369,7 +372,7 @@ def add_patient_insurance(conn, args):
         1 if getattr(args, "preauth_required", None) == "1" else 0,
         "active", args.company_id, _ts, _ts,
     ))
-    audit(conn, "healthclaw_patient_insurance", ins_id, "health-add-patient-insurance", args.company_id)
+    audit(conn, SKILL, "health-add-patient-insurance", "healthclaw_patient_insurance", ins_id)
     conn.commit()
     ok({"id": ins_id, "naming_series": naming, "insurance_type": insurance_type})
 
@@ -428,7 +431,7 @@ def update_patient_insurance(conn, args):
     data["updated_at"] = now()
     sql, params = dynamic_update("healthclaw_patient_insurance", data, {"id": ins_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_patient_insurance", ins_id, "health-update-patient-insurance", None, {"updated_fields": changed})
+    audit(conn, SKILL, "health-update-patient-insurance", "healthclaw_patient_insurance", ins_id, new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": ins_id, "updated_fields": changed})
 
@@ -497,7 +500,7 @@ def add_allergy(conn, args):
         getattr(args, "onset_date", None), "active",
         noted_by, getattr(args, "notes", None), _ts, _ts,
     ))
-    audit(conn, "healthclaw_allergy", allergy_id, "health-add-allergy", None)
+    audit(conn, SKILL, "health-add-allergy", "healthclaw_allergy", allergy_id)
     conn.commit()
     ok({"id": allergy_id, "allergen": args.allergen, "severity": severity})
 
@@ -537,7 +540,7 @@ def update_allergy(conn, args):
     data["updated_at"] = now()
     sql, params = dynamic_update("healthclaw_allergy", data, {"id": allergy_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_allergy", allergy_id, "health-update-allergy", None, {"updated_fields": changed})
+    audit(conn, SKILL, "health-update-allergy", "healthclaw_allergy", allergy_id, new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": allergy_id, "updated_fields": changed})
 
@@ -595,7 +598,7 @@ def add_medical_history(conn, args):
         getattr(args, "medhist_status", None) or "active",
         getattr(args, "notes", None), _ts, _ts,
     ))
-    audit(conn, "healthclaw_medical_history", medhist_id, "health-add-medical-history", None)
+    audit(conn, SKILL, "health-add-medical-history", "healthclaw_medical_history", medhist_id)
     conn.commit()
     ok({"id": medhist_id, "condition": condition})
 
@@ -631,7 +634,7 @@ def update_medical_history(conn, args):
     data["updated_at"] = now()
     sql, params = dynamic_update("healthclaw_medical_history", data, {"id": mh_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_medical_history", mh_id, "health-update-medical-history", None, {"updated_fields": changed})
+    audit(conn, SKILL, "health-update-medical-history", "healthclaw_medical_history", mh_id, new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": mh_id, "updated_fields": changed})
 
@@ -694,7 +697,7 @@ def add_patient_contact(conn, args):
         1 if getattr(args, "is_primary", None) == "1" else 0,
         _ts, _ts,
     ))
-    audit(conn, "healthclaw_patient_contact", contact_id, "health-add-patient-contact", None)
+    audit(conn, SKILL, "health-add-patient-contact", "healthclaw_patient_contact", contact_id)
     conn.commit()
     ok({"id": contact_id, "name": contact_name, "contact_type": contact_type})
 
@@ -734,7 +737,7 @@ def update_patient_contact(conn, args):
     data["updated_at"] = now()
     sql, params = dynamic_update("healthclaw_patient_contact", data, {"id": contact_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_patient_contact", contact_id, "health-update-patient-contact", None, {"updated_fields": changed})
+    audit(conn, SKILL, "health-update-patient-contact", "healthclaw_patient_contact", contact_id, new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": contact_id, "updated_fields": changed})
 
@@ -775,7 +778,7 @@ def add_consent(conn, args):
         getattr(args, "notes", None),
         args.company_id, _ts, _ts,
     ))
-    audit(conn, "healthclaw_consent", consent_id, "health-add-consent", args.company_id)
+    audit(conn, SKILL, "health-add-consent", "healthclaw_consent", consent_id)
     conn.commit()
     ok({"id": consent_id, "consent_type": consent_type, "status": "active"})
 
@@ -848,11 +851,8 @@ def merge_patients(conn, args):
     repoint_counts = {}
     for table_name in _PATIENT_FK_TABLES:
         # Check if table exists (some Phase 8 tables may not exist in older schemas)
-        table_exists = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-            (table_name,)
-        ).fetchone()
-        if not table_exists:
+        present = table_exists(conn, table_name)
+        if not present:
             continue
 
         t = Table(table_name)
@@ -875,11 +875,11 @@ def merge_patients(conn, args):
     sql, params = dynamic_update("healthclaw_patient", upd_data, {"id": source_id})
     conn.execute(sql, params)
 
-    audit(conn, "healthclaw_patient", source_id, "health-merge-patients", None, {
+    audit(conn, SKILL, "health-merge-patients", "healthclaw_patient", source_id, new_values={
         "source_id": source_id, "target_id": target_id,
         "repoint_counts": repoint_counts,
     })
-    audit(conn, "healthclaw_patient", target_id, "health-merge-patients-target", None, {
+    audit(conn, SKILL, "health-merge-patients-target", "healthclaw_patient", target_id, new_values={
         "source_id": source_id, "merged_from": source_name,
     })
     conn.commit()

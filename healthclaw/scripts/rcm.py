@@ -27,6 +27,8 @@ try:
 except ImportError:
     pass
 
+SKILL = "healthclaw"
+
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 # ---------------------------------------------------------------------------
@@ -116,7 +118,7 @@ def add_payer(conn, args):
         "active",
         now, now,
     ))
-    audit(conn, "healthclaw_payer", payer_id, "health-add-payer", args.company_id)
+    audit(conn, SKILL, "health-add-payer", "healthclaw_payer", payer_id)
     conn.commit()
     ok({"id": payer_id, "name": name, "payer_type": payer_type, "status": "active"})
 
@@ -187,7 +189,7 @@ def update_payer(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_payer", data, {"id": payer_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_payer", payer_id, "health-update-payer", None, {"updated_fields": changed})
+    audit(conn, SKILL, "health-update-payer", "healthclaw_payer", payer_id, new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": payer_id, "updated_fields": changed})
 
@@ -271,7 +273,7 @@ def link_payer_fee_schedule(conn, args):
     }
     sql, params = dynamic_update("healthclaw_payer", data, {"id": payer_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_payer", payer_id, "health-link-payer-fee-schedule", None, {"fee_schedule_id": fee_schedule_id})
+    audit(conn, SKILL, "health-link-payer-fee-schedule", "healthclaw_payer", payer_id, new_values={"fee_schedule_id": fee_schedule_id})
     conn.commit()
     ok({"id": payer_id, "default_fee_schedule_id": fee_schedule_id})
 
@@ -421,7 +423,7 @@ def record_eligibility_check(conn, args):
         getattr(args, "checked_by", None),
         now,
     ))
-    audit(conn, "healthclaw_eligibility_check", check_id, "health-record-eligibility-check", None)
+    audit(conn, SKILL, "health-record-eligibility-check", "healthclaw_eligibility_check", check_id)
     conn.commit()
     ok({"id": check_id, "patient_id": args.patient_id, "coverage_status": coverage_status})
 
@@ -658,7 +660,7 @@ def import_era_file(conn, args):
         sql_upd, params_upd = dynamic_update("healthclaw_era_file", data, {"id": era_file_id})
         conn.execute(sql_upd, params_upd)
 
-    audit(conn, "healthclaw_era_file", era_file_id, "health-import-era-file", args.company_id)
+    audit(conn, SKILL, "health-import-era-file", "healthclaw_era_file", era_file_id)
     conn.commit()
     ok({
         "id": era_file_id,
@@ -865,7 +867,7 @@ def auto_post_era(conn, args):
     era_sql, era_params = dynamic_update("healthclaw_era_file", era_upd, {"id": era_file_id})
     conn.execute(era_sql, era_params)
 
-    audit(conn, "healthclaw_era_file", era_file_id, "health-auto-post-era", company_id)
+    audit(conn, SKILL, "health-auto-post-era", "healthclaw_era_file", era_file_id)
     conn.commit()
     ok({
         "era_file_id": era_file_id,
@@ -988,7 +990,7 @@ def add_payer_enrollment(conn, args):
         getattr(args, "notes", None),
         args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_payer_enrollment", enroll_id, "health-add-payer-enrollment", args.company_id)
+    audit(conn, SKILL, "health-add-payer-enrollment", "healthclaw_payer_enrollment", enroll_id)
     conn.commit()
     ok({"id": enroll_id, "provider_id": provider_id, "payer_id": payer_id, "enrollment_status": enrollment_status})
 

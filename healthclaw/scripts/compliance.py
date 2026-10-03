@@ -28,6 +28,8 @@ try:
 except ImportError:
     pass
 
+SKILL = "healthclaw"
+
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 # ---------------------------------------------------------------------------
@@ -426,7 +428,7 @@ def generate_good_faith_estimate(conn, args):
         getattr(args, "notes", None),
         now, now,
     ))
-    audit(conn, "healthclaw_good_faith_estimate", gfe_id, "health-generate-good-faith-estimate", args.company_id)
+    audit(conn, SKILL, "health-generate-good-faith-estimate", "healthclaw_good_faith_estimate", gfe_id)
     conn.commit()
     ok({
         "id": gfe_id,
@@ -505,7 +507,7 @@ def provide_good_faith_estimate(conn, args):
     }
     sql, params = dynamic_update("healthclaw_good_faith_estimate", data, {"id": estimate_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_good_faith_estimate", estimate_id, "health-provide-good-faith-estimate", None)
+    audit(conn, SKILL, "health-provide-good-faith-estimate", "healthclaw_good_faith_estimate", estimate_id)
     conn.commit()
     ok({"id": estimate_id, "gfe_status": "provided", "provided_at": now})
 
@@ -560,7 +562,7 @@ def add_quality_measure(conn, args):
         "active",
         now, now,
     ))
-    audit(conn, "healthclaw_quality_measure", qm_id, "health-add-quality-measure", args.company_id)
+    audit(conn, SKILL, "health-add-quality-measure", "healthclaw_quality_measure", qm_id)
     conn.commit()
     ok({
         "id": qm_id,
@@ -678,7 +680,7 @@ def calculate_measure_result(conn, args):
         str(points_earned), "calculated", now,
         getattr(args, "notes", None), now,
     ))
-    audit(conn, "healthclaw_quality_measure_result", result_id, "health-calculate-measure-result", None)
+    audit(conn, SKILL, "health-calculate-measure-result", "healthclaw_quality_measure_result", result_id)
     conn.commit()
     ok({
         "id": result_id,
@@ -877,7 +879,7 @@ def add_baa(conn, args):
         int(getattr(args, "breach_notification_days", None) or 60),
         "active", args.company_id, now,
     ))
-    audit(conn, "healthclaw_baa", baa_id, "health-add-baa", args.company_id)
+    audit(conn, SKILL, "health-add-baa", "healthclaw_baa", baa_id)
     conn.commit()
     ok({
         "id": baa_id,
@@ -989,7 +991,7 @@ def add_breach_incident(conn, args):
         getattr(args, "remediation", None),
         "investigating", args.company_id, now,
     ))
-    audit(conn, "healthclaw_breach_incident", breach_id, "health-add-breach-incident", args.company_id)
+    audit(conn, SKILL, "health-add-breach-incident", "healthclaw_breach_incident", breach_id)
     conn.commit()
     ok({
         "id": breach_id,
@@ -1055,7 +1057,7 @@ def update_breach_incident(conn, args):
 
     sql, params = dynamic_update("healthclaw_breach_incident", data, {"id": breach_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_breach_incident", breach_id, "health-update-breach-incident", None)
+    audit(conn, SKILL, "health-update-breach-incident", "healthclaw_breach_incident", breach_id)
     conn.commit()
     ok({"id": breach_id, "updated_fields": changed})
 
@@ -1178,7 +1180,7 @@ def add_consent_template(conn, args):
         json.dumps({"template": True, "version": version}),
         args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_consent", template_id, "health-add-consent-template", args.company_id)
+    audit(conn, SKILL, "health-add-consent-template", "healthclaw_consent", template_id)
     conn.commit()
     ok({
         "id": template_id,

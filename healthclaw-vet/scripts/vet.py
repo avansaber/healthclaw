@@ -17,9 +17,11 @@ try:
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row, now as sql_now
 except ImportError:
     pass
+
+SKILL = "healthclaw-vet"
 
 
 # ---- Helpers ----------------------------------------------------------------
@@ -82,7 +84,7 @@ def add_animal_patient(conn, args):
         spay_neuter_status, getattr(args, "reproductive_status", None),
         now, now,
     ))
-    audit(conn, "healthclaw_animal_patient", entry_id, "vet-add-animal-patient", args.company_id)
+    audit(conn, SKILL, "vet-add-animal-patient", "healthclaw_animal_patient", entry_id)
     conn.commit()
     ok({"id": entry_id, "species": args.species, "patient_id": args.patient_id})
 
@@ -126,10 +128,10 @@ def update_animal_patient(conn, args):
 
     if not updates:
         err("No fields to update")
-    updates.append("updated_at = datetime('now')")
+    updates.append(f"updated_at = {sql_now()}")
     params.append(entry_id)
     conn.execute(f"UPDATE healthclaw_animal_patient SET {', '.join(updates)} WHERE id = ?", params)
-    audit(conn, "healthclaw_animal_patient", entry_id, "vet-update-animal-patient", getattr(args, "company_id", None))
+    audit(conn, SKILL, "vet-update-animal-patient", "healthclaw_animal_patient", entry_id)
     conn.commit()
     ok({"id": entry_id, "updated_fields": changed})
 
@@ -221,7 +223,7 @@ def add_boarding(conn, args):
         getattr(args, "special_needs", None), daily_rate, "checked_in",
         getattr(args, "notes", None), now, now,
     ))
-    audit(conn, "healthclaw_boarding", entry_id, "vet-add-boarding", args.company_id)
+    audit(conn, SKILL, "vet-add-boarding", "healthclaw_boarding", entry_id)
     conn.commit()
     ok({"id": entry_id, "animal_patient_id": args.animal_patient_id, "check_in_date": args.check_in_date})
 
@@ -261,10 +263,10 @@ def update_boarding(conn, args):
 
     if not updates:
         err("No fields to update")
-    updates.append("updated_at = datetime('now')")
+    updates.append(f"updated_at = {sql_now()}")
     params.append(entry_id)
     conn.execute(f"UPDATE healthclaw_boarding SET {', '.join(updates)} WHERE id = ?", params)
-    audit(conn, "healthclaw_boarding", entry_id, "vet-update-boarding", getattr(args, "company_id", None))
+    audit(conn, SKILL, "vet-update-boarding", "healthclaw_boarding", entry_id)
     conn.commit()
     ok({"id": entry_id, "updated_fields": changed})
 
@@ -349,7 +351,7 @@ def calculate_dose(conn, args):
         getattr(args, "frequency", None), getattr(args, "notes", None),
         now, now,
     ))
-    audit(conn, "healthclaw_weight_dosing", entry_id, "vet-calculate-dose", args.company_id)
+    audit(conn, SKILL, "vet-calculate-dose", "healthclaw_weight_dosing", entry_id)
     conn.commit()
     ok({
         "id": entry_id,
@@ -423,7 +425,7 @@ def add_owner_link(conn, args):
         relationship, is_primary, financial_responsibility,
         getattr(args, "notes", None), now, now,
     ))
-    audit(conn, "healthclaw_owner_link", entry_id, "vet-add-owner-link", args.company_id)
+    audit(conn, SKILL, "vet-add-owner-link", "healthclaw_owner_link", entry_id)
     conn.commit()
     ok({"id": entry_id, "owner_name": args.owner_name, "animal_patient_id": args.animal_patient_id})
 
@@ -464,10 +466,10 @@ def update_owner_link(conn, args):
 
     if not updates:
         err("No fields to update")
-    updates.append("updated_at = datetime('now')")
+    updates.append(f"updated_at = {sql_now()}")
     params.append(entry_id)
     conn.execute(f"UPDATE healthclaw_owner_link SET {', '.join(updates)} WHERE id = ?", params)
-    audit(conn, "healthclaw_owner_link", entry_id, "vet-update-owner-link", getattr(args, "company_id", None))
+    audit(conn, SKILL, "vet-update-owner-link", "healthclaw_owner_link", entry_id)
     conn.commit()
     ok({"id": entry_id, "updated_fields": changed})
 

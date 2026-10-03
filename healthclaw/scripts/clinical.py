@@ -29,6 +29,8 @@ except ImportError:
 
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+SKILL = "healthclaw"
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -110,7 +112,7 @@ def add_encounter(conn, args):
         getattr(args, "notes", None),
         args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_encounter", enc_id, "health-add-encounter", args.company_id)
+    audit(conn, SKILL, "health-add-encounter", "healthclaw_encounter", enc_id)
     conn.commit()
     ok({"id": enc_id, "naming_series": naming, "encounter_date": enc_date, "status": "open"})
 
@@ -148,7 +150,7 @@ def update_encounter(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_encounter", data, {"id": enc_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_encounter", enc_id, "health-update-encounter", None, {"updated_fields": changed})
+    audit(conn, SKILL, "health-update-encounter", "healthclaw_encounter", enc_id, new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": enc_id, "updated_fields": changed})
 
@@ -228,7 +230,7 @@ def add_vitals(conn, args):
         int(args.pain_level) if getattr(args, "pain_level", None) else None,
         getattr(args, "notes", None), now,
     ))
-    audit(conn, "healthclaw_vitals", vitals_id, "health-add-vitals", None)
+    audit(conn, SKILL, "health-add-vitals", "healthclaw_vitals", vitals_id)
     conn.commit()
     ok({"id": vitals_id, "encounter_id": enc_id})
 
@@ -281,7 +283,7 @@ def add_diagnosis(conn, args):
         getattr(args, "diagnosed_by_id", None) or getattr(args, "provider_id", None),
         getattr(args, "notes", None), now, now,
     ))
-    audit(conn, "healthclaw_diagnosis", dx_id, "health-add-diagnosis", None)
+    audit(conn, SKILL, "health-add-diagnosis", "healthclaw_diagnosis", dx_id)
     conn.commit()
     ok({"id": dx_id, "icd10_code": icd10, "diagnosis_type": dx_type})
 
@@ -315,7 +317,7 @@ def update_diagnosis(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_diagnosis", data, {"id": dx_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_diagnosis", dx_id, "health-update-diagnosis", getattr(args, "company_id", None))
+    audit(conn, SKILL, "health-update-diagnosis", "healthclaw_diagnosis", dx_id)
     conn.commit()
     ok({"id": dx_id, "updated_fields": changed})
 
@@ -388,7 +390,7 @@ def add_prescription(conn, args):
         "active", getattr(args, "notes", None),
         args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_prescription", rx_id, "health-add-prescription", args.company_id)
+    audit(conn, SKILL, "health-add-prescription", "healthclaw_prescription", rx_id)
     conn.commit()
     ok({"id": rx_id, "naming_series": naming, "medication_name": med_name, "status": "active"})
 
@@ -426,7 +428,7 @@ def update_prescription(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_prescription", data, {"id": rx_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_prescription", rx_id, "health-update-prescription", getattr(args, "company_id", None))
+    audit(conn, SKILL, "health-update-prescription", "healthclaw_prescription", rx_id)
     conn.commit()
     ok({"id": rx_id, "updated_fields": changed})
 
@@ -486,7 +488,7 @@ def add_procedure(conn, args):
         "completed", getattr(args, "notes", None),
         args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_procedure", proc_id, "health-add-procedure", args.company_id)
+    audit(conn, SKILL, "health-add-procedure", "healthclaw_procedure", proc_id)
     conn.commit()
     ok({"id": proc_id, "naming_series": naming, "cpt_code": cpt, "status": "completed"})
 
@@ -541,7 +543,7 @@ def add_clinical_note(conn, args):
         None, None, None, None,
         "draft", now, now,
     ))
-    audit(conn, "healthclaw_clinical_note", note_id, "health-add-clinical-note", None)
+    audit(conn, SKILL, "health-add-clinical-note", "healthclaw_clinical_note", note_id)
     conn.commit()
     ok({"id": note_id, "note_type": note_type, "status": "draft"})
 
@@ -581,7 +583,7 @@ def update_clinical_note(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_clinical_note", data, {"id": note_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_clinical_note", note_id, "health-update-clinical-note", getattr(args, "company_id", None))
+    audit(conn, SKILL, "health-update-clinical-note", "healthclaw_clinical_note", note_id)
     conn.commit()
     ok({"id": note_id, "updated_fields": changed})
 
@@ -644,7 +646,7 @@ def add_order(conn, args):
         "pending", getattr(args, "notes", None),
         args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_order", order_id, "health-add-order", args.company_id)
+    audit(conn, SKILL, "health-add-order", "healthclaw_order", order_id)
     conn.commit()
     ok({"id": order_id, "naming_series": naming, "order_type": order_type, "status": "pending"})
 
@@ -731,7 +733,7 @@ def add_med_reconciliation(conn, args):
         getattr(args, "notes", None),
         "pending", args.company_id, now,
     ))
-    audit(conn, "healthclaw_med_reconciliation", rec_id, "health-add-med-reconciliation", args.company_id)
+    audit(conn, SKILL, "health-add-med-reconciliation", "healthclaw_med_reconciliation", rec_id)
     conn.commit()
     ok({"id": rec_id, "reconciliation_type": recon_type, "recon_status": "pending"})
 
@@ -811,7 +813,7 @@ def add_immunization(conn, args):
         getattr(args, "reaction_notes", None),
         args.company_id, now,
     ))
-    audit(conn, "healthclaw_immunization", imm_id, "health-add-immunization", args.company_id)
+    audit(conn, SKILL, "health-add-immunization", "healthclaw_immunization", imm_id)
     conn.commit()
     ok({"id": imm_id, "vaccine_name": vaccine_name, "administration_date": admin_date})
 
@@ -848,7 +850,7 @@ def update_immunization(conn, args):
         err("No fields to update")
     sql, params = dynamic_update("healthclaw_immunization", data, {"id": imm_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_immunization", imm_id, "health-update-immunization", None)
+    audit(conn, SKILL, "health-update-immunization", "healthclaw_immunization", imm_id)
     conn.commit()
     ok({"id": imm_id, "updated_fields": changed})
 
@@ -945,7 +947,7 @@ def add_care_team_member(conn, args):
         getattr(args, "start_date", None) or now[:10],
         None, "active", args.company_id, now,
     ))
-    audit(conn, "healthclaw_care_team", ct_id, "health-add-care-team-member", args.company_id)
+    audit(conn, SKILL, "health-add-care-team-member", "healthclaw_care_team", ct_id)
     conn.commit()
     ok({"id": ct_id, "patient_id": args.patient_id,
         "provider_id": args.provider_id, "role": role, "care_team_status": "active"})
@@ -990,7 +992,7 @@ def remove_care_team_member(conn, args):
     data = {"status": "inactive", "end_date": now[:10]}
     sql, params = dynamic_update("healthclaw_care_team", data, {"id": ct_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_care_team", ct_id, "health-remove-care-team-member", None)
+    audit(conn, SKILL, "health-remove-care-team-member", "healthclaw_care_team", ct_id)
     conn.commit()
     ok({"id": ct_id, "care_team_status": "inactive", "end_date": now[:10]})
 
@@ -1034,7 +1036,7 @@ def add_patient_education(conn, args):
         None, None, education_meta, None, body, None, None, None, None,
         "signed", now, now,
     ))
-    audit(conn, "healthclaw_clinical_note", note_id, "health-add-patient-education", None)
+    audit(conn, SKILL, "health-add-patient-education", "healthclaw_clinical_note", note_id)
     conn.commit()
     ok({"id": note_id, "education_type": education_type,
         "encounter_id": enc_id, "patient_id": args.patient_id, "note_status": "signed"})
@@ -1123,8 +1125,7 @@ def create_recurring_appointment(conn, args):
         created_ids.append(appt_id)
         current_date += timedelta(days=interval_days)
 
-    audit(conn, "healthclaw_appointment", series_id, "health-create-recurring-appointment",
-          args.company_id, {"count": count, "interval_days": interval_days})
+    audit(conn, SKILL, "health-create-recurring-appointment", "healthclaw_appointment", series_id, new_values={"count": count, "interval_days": interval_days})
     conn.commit()
     last_date = (datetime.strptime(appt_date[:10], "%Y-%m-%d") + timedelta(days=interval_days * (count - 1))).strftime("%Y-%m-%d")
     ok({"series_id": series_id, "appointment_count": len(created_ids),

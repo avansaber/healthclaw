@@ -27,6 +27,8 @@ try:
 except ImportError:
     pass
 
+SKILL = "healthclaw"
+
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -241,7 +243,7 @@ def batch_submit_claims(conn, args):
             data={"claim_status": "submitted", "updated_at": sql_now()},
             where={"id": P()})
         conn.execute(sql, (claim_id,))
-        audit(conn, "healthclaw_claim", claim_id, "health-batch-submit-claims", args.company_id)
+        audit(conn, SKILL, "health-batch-submit-claims", "healthclaw_claim", claim_id)
         submitted.append(claim_id)
 
     conn.commit()
@@ -570,7 +572,7 @@ def add_scheduling_rule(conn, args):
         (rule_id, rule_name, rule_type, str(rule_value),
          getattr(args, "provider_id", None), args.company_id, "active", _now_iso())
     )
-    audit(conn, "healthclaw_scheduling_rule", rule_id, "health-add-scheduling-rule", args.company_id)
+    audit(conn, SKILL, "health-add-scheduling-rule", "healthclaw_scheduling_rule", rule_id)
     conn.commit()
     ok({"id": rule_id, "rule_name": rule_name, "rule_type": rule_type,
         "rule_value": str(rule_value), "rule_status": "active"})

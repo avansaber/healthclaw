@@ -21,6 +21,8 @@ try:
 except ImportError:
     pass
 
+SKILL = "healthclaw"
+
 ENTITY_PREFIXES.setdefault("healthclaw_lab_order", "LO-")
 ENTITY_PREFIXES.setdefault("healthclaw_lab_result", "LR-")
 
@@ -70,7 +72,7 @@ def add_lab_test(conn, args):
          turnaround_hours, base_price, 1,
          getattr(args, "notes", None), _ts, _ts)
     )
-    audit(conn, "healthclaw_lab_test", test_id, "health-add-lab-test", args.company_id)
+    audit(conn, SKILL, "health-add-lab-test", "healthclaw_lab_test", test_id)
     conn.commit()
     ok({"id": test_id, "test_name": args.test_name, "base_price": base_price})
 
@@ -143,7 +145,7 @@ def add_lab_order(conn, args):
          fasting_required,
          getattr(args, "notes", None), _ts, _ts)
     )
-    audit(conn, "healthclaw_lab_order", order_id, "health-add-lab-order", args.company_id)
+    audit(conn, SKILL, "health-add-lab-order", "healthclaw_lab_order", order_id)
     conn.commit()
     ok({"id": order_id, "lab_test_id": args.lab_test_id, "priority": priority,
         "order_status": "ordered"})
@@ -237,7 +239,7 @@ def add_lab_result(conn, args):
         where={"id": P()})
     conn.execute(_upd_sql, (_ts, args.lab_order_id))
 
-    audit(conn, "healthclaw_lab_result", result_id, "health-add-lab-result", args.company_id)
+    audit(conn, SKILL, "health-add-lab-result", "healthclaw_lab_result", result_id)
     conn.commit()
     ok({"id": result_id, "lab_order_id": args.lab_order_id,
         "is_abnormal": is_abnormal, "is_critical": is_critical})
@@ -303,8 +305,7 @@ def mark_lab_critical(conn, args):
         data={"is_critical": 1, "is_abnormal": 1, "updated_at": now()},
         where={"id": P()})
     conn.execute(_upd_sql, (result_id,))
-    audit(conn, "healthclaw_lab_result", result_id, "health-mark-lab-critical",
-          getattr(args, "company_id", None) or row_to_dict(row).get("company_id"))
+    audit(conn, SKILL, "health-mark-lab-critical", "healthclaw_lab_result", result_id)
     conn.commit()
     ok({"id": result_id, "is_critical": 1, "is_abnormal": 1})
 

@@ -26,6 +26,8 @@ except ImportError:
 
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+SKILL = "healthclaw"
+
 # ---------------------------------------------------------------------------
 # Validation constants
 # ---------------------------------------------------------------------------
@@ -91,7 +93,7 @@ def add_provider_schedule(conn, args):
         getattr(args, "location", None),
         "active", args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_provider_schedule", sched_id, "health-add-provider-schedule", args.company_id)
+    audit(conn, SKILL, "health-add-provider-schedule", "healthclaw_provider_schedule", sched_id)
     conn.commit()
     ok({"id": sched_id, "provider_id": args.provider_id, "day_of_week": day})
 
@@ -127,7 +129,7 @@ def update_provider_schedule(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_provider_schedule", data, {"id": sched_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_provider_schedule", sched_id, "health-update-provider-schedule", getattr(args, "company_id", None))
+    audit(conn, SKILL, "health-update-provider-schedule", "healthclaw_provider_schedule", sched_id)
     conn.commit()
     ok({"id": sched_id, "updated_fields": changed})
 
@@ -178,7 +180,7 @@ def add_schedule_block(conn, args):
         reason, getattr(args, "notes", None),
         args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_schedule_block", block_id, "health-add-schedule-block", args.company_id)
+    audit(conn, SKILL, "health-add-schedule-block", "healthclaw_schedule_block", block_id)
     conn.commit()
     ok({"id": block_id, "block_date": block_date, "reason": reason})
 
@@ -240,7 +242,7 @@ def add_appointment(conn, args):
         "scheduled", getattr(args, "notes", None),
         args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_appointment", appt_id, "health-add-appointment", args.company_id)
+    audit(conn, SKILL, "health-add-appointment", "healthclaw_appointment", appt_id)
     conn.commit()
     ok({"id": appt_id, "naming_series": naming, "appointment_date": appt_date, "status": "scheduled"})
 
@@ -284,7 +286,7 @@ def update_appointment(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_appointment", data, {"id": appt_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_appointment", appt_id, "health-update-appointment", None, {"updated_fields": changed})
+    audit(conn, SKILL, "health-update-appointment", "healthclaw_appointment", appt_id, new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": appt_id, "updated_fields": changed})
 
@@ -374,7 +376,7 @@ def check_in_appointment(conn, args):
         data={"status": "checked_in", "check_in_time": P(), "updated_at": sql_now()},
         where={"id": P()})
     conn.execute(sql, (now, appt_id))
-    audit(conn, "healthclaw_appointment", appt_id, "health-check-in-appointment", None)
+    audit(conn, SKILL, "health-check-in-appointment", "healthclaw_appointment", appt_id)
     conn.commit()
     ok({"id": appt_id, "status": "checked_in", "check_in_time": now})
 
@@ -397,7 +399,7 @@ def check_out_appointment(conn, args):
         data={"status": "completed", "check_out_time": P(), "updated_at": sql_now()},
         where={"id": P()})
     conn.execute(sql, (now, appt_id))
-    audit(conn, "healthclaw_appointment", appt_id, "health-check-out-appointment", None)
+    audit(conn, SKILL, "health-check-out-appointment", "healthclaw_appointment", appt_id)
     conn.commit()
     ok({"id": appt_id, "status": "completed", "check_out_time": now})
 
@@ -419,7 +421,7 @@ def cancel_appointment(conn, args):
         data={"status": "cancelled", "cancellation_reason": P(), "updated_at": sql_now()},
         where={"id": P()})
     conn.execute(sql, (getattr(args, "cancellation_reason", None), appt_id))
-    audit(conn, "healthclaw_appointment", appt_id, "health-cancel-appointment", None)
+    audit(conn, SKILL, "health-cancel-appointment", "healthclaw_appointment", appt_id)
     conn.commit()
     ok({"id": appt_id, "status": "cancelled"})
 
@@ -449,7 +451,7 @@ def add_waitlist(conn, args):
         getattr(args, "notes", None),
         args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_waitlist", wl_id, "health-add-waitlist", args.company_id)
+    audit(conn, SKILL, "health-add-waitlist", "healthclaw_waitlist", wl_id)
     conn.commit()
     ok({"id": wl_id, "priority": priority, "status": "waiting"})
 
@@ -620,7 +622,7 @@ def schedule_multi_resource(conn, args):
         "scheduled", getattr(args, "notes", None),
         args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_appointment", appt_id, "health-schedule-multi-resource", args.company_id)
+    audit(conn, SKILL, "health-schedule-multi-resource", "healthclaw_appointment", appt_id)
     conn.commit()
     ok({
         "id": appt_id, "naming_series": naming,
@@ -665,7 +667,7 @@ def add_reminder(conn, args):
         reminder_id, appt_id, reminder_type, scheduled_at,
         None, "pending", now,
     ))
-    audit(conn, "healthclaw_appointment_reminder", reminder_id, "health-add-reminder", None)
+    audit(conn, SKILL, "health-add-reminder", "healthclaw_appointment_reminder", reminder_id)
     conn.commit()
     ok({"id": reminder_id, "appointment_id": appt_id, "reminder_type": reminder_type, "reminder_status": "pending"})
 

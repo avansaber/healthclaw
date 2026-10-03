@@ -21,6 +21,8 @@ try:
 except ImportError:
     pass
 
+SKILL = "healthclaw"
+
 ENTITY_PREFIXES.setdefault("healthclaw_charge", "CHG-")
 ENTITY_PREFIXES.setdefault("healthclaw_claim", "CLM-")
 
@@ -67,7 +69,7 @@ def add_procedure_code(conn, args):
          getattr(args, "category", None), default_fee, 1,
          getattr(args, "notes", None), _ts, _ts)
     )
-    audit(conn, "healthclaw_procedure_code", pc_id, "health-add-procedure-code", args.company_id)
+    audit(conn, SKILL, "health-add-procedure-code", "healthclaw_procedure_code", pc_id)
     conn.commit()
     ok({"id": pc_id, "code": args.code, "code_type": code_type, "default_fee": default_fee})
 
@@ -137,7 +139,7 @@ def add_charge(conn, args):
          "unbilled",
          getattr(args, "notes", None), _ts, _ts)
     )
-    audit(conn, "healthclaw_charge", charge_id, "health-add-charge", args.company_id)
+    audit(conn, SKILL, "health-add-charge", "healthclaw_charge", charge_id)
     conn.commit()
     ok({"id": charge_id, "total_fee": total_fee, "charge_status": "unbilled"})
 
@@ -197,7 +199,7 @@ def get_charge(conn, args):
 # 6. add-claim
 # ---------------------------------------------------------------------------
 def add_claim(conn, args):
-    for req in ("company_id", "patient_id", "payer_name"):
+    for req in ("company_id", "patient_id", "payer_name", "claim_date"):
         if not getattr(args, req, None):
             err(f"--{req.replace('_', '-')} is required")
 
@@ -217,20 +219,21 @@ def add_claim(conn, args):
 
     claim_id = str(uuid.uuid4())
     _ts = _now_iso()
-    sql, _ = insert_row("healthclaw_claim", {"id": P(), "company_id": P(), "patient_id": P(), "payer_name": P(), "payer_id_number": P(), "policy_number": P(), "group_number": P(), "claim_number": P(), "charge_ids": P(), "total_charged": P(), "total_allowed": P(), "total_paid": P(), "total_adjustment": P(), "patient_responsibility": P(), "claim_status": P(), "notes": P(), "created_at": P(), "updated_at": P()})
+    sql, _ = insert_row("healthclaw_claim", {"id": P(), "company_id": P(), "patient_id": P(), "payer_name": P(), "payer_id_number": P(), "policy_number": P(), "group_number": P(), "claim_number": P(), "claim_date": P(), "charge_ids": P(), "total_charged": P(), "total_allowed": P(), "total_paid": P(), "total_adjustment": P(), "patient_responsibility": P(), "claim_status": P(), "notes": P(), "created_at": P(), "updated_at": P()})
     conn.execute(sql,
         (claim_id, args.company_id, args.patient_id, args.payer_name,
          getattr(args, "payer_id_number", None),
          getattr(args, "policy_number", None),
          getattr(args, "group_number", None),
          getattr(args, "claim_number", None),
+         args.claim_date,
          charge_ids,
          str(round_currency(total_charged)),
          "0.00", "0.00", "0.00", "0.00",
          "draft",
          getattr(args, "notes", None), _ts, _ts)
     )
-    audit(conn, "healthclaw_claim", claim_id, "health-add-claim", args.company_id)
+    audit(conn, SKILL, "health-add-claim", "healthclaw_claim", claim_id)
     conn.commit()
     ok({"id": claim_id, "total_charged": str(round_currency(total_charged)),
         "claim_status": "draft"})
@@ -323,7 +326,7 @@ def submit_claim(conn, args):
     for cid in charge_ids:
         conn.execute(_chg_sql, (cid,))
 
-    audit(conn, "healthclaw_claim", claim_id, "health-submit-claim", claim["company_id"])
+    audit(conn, SKILL, "health-submit-claim", "healthclaw_claim", claim_id)
     conn.commit()
     ok({"id": claim_id, "claim_status": "submitted", "submitted_date": _ts,
         "charges_billed": len(charge_ids)})
@@ -366,21 +369,29 @@ def add_payment_posting(conn, args):
          getattr(args, "notes", None), _ts)
     )
 
-    # PyPika: skipped — complex CAST arithmetic expression for claim totals
+    # Claim totals accumulate in Decimal. SQL NUMERIC arithmetic computes in
+    # floating point on SQLite and drops the scale ("200" for 200.00).
     from datetime import datetime as _dt, timezone as _tz
     _now_str = _dt.now(_tz.utc).strftime('%Y-%m-%d %H:%M:%S')
-    conn.execute(
-        """UPDATE healthclaw_claim SET
-           total_allowed = CAST((CAST(total_allowed AS NUMERIC) + CAST(? AS NUMERIC)) AS TEXT),
-           total_paid = CAST((CAST(total_paid AS NUMERIC) + CAST(? AS NUMERIC)) AS TEXT),
-           total_adjustment = CAST((CAST(total_adjustment AS NUMERIC) + CAST(? AS NUMERIC)) AS TEXT),
-           patient_responsibility = CAST((CAST(patient_responsibility AS NUMERIC) + CAST(? AS NUMERIC)) AS TEXT),
-           updated_at = ?
-           WHERE id = ?""",
-        (allowed_amount, paid_amount, adjustment, patient_responsibility, _now_str, args.claim_id)
-    )
+    _cur = conn.execute(
+        Q.from_(Table("healthclaw_claim")).select(
+            Field("total_allowed"), Field("total_paid"),
+            Field("total_adjustment"), Field("patient_responsibility"),
+        ).where(Field("id") == P()).get_sql(),
+        (args.claim_id,)
+    ).fetchone()
+    _new_totals = [
+        str(round_currency(to_decimal(_cur[i] or "0") + to_decimal(delta)))
+        for i, delta in enumerate(
+            (allowed_amount, paid_amount, adjustment, patient_responsibility))
+    ]
+    sql = update_row("healthclaw_claim",
+        data={"total_allowed": P(), "total_paid": P(), "total_adjustment": P(),
+              "patient_responsibility": P(), "updated_at": P()},
+        where={"id": P()})
+    conn.execute(sql, (*_new_totals, _now_str, args.claim_id))
 
-    audit(conn, "healthclaw_payment_posting", pp_id, "health-add-payment-posting", args.company_id)
+    audit(conn, SKILL, "health-add-payment-posting", "healthclaw_payment_posting", pp_id)
     conn.commit()
     ok({"id": pp_id, "paid_amount": paid_amount, "adjustment": adjustment})
 

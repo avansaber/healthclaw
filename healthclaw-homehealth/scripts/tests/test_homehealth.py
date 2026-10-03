@@ -15,10 +15,25 @@ Actions tested (12):
   - homehealth-list-aide-assignments
 """
 import json
+import uuid
 import pytest
-from homehealth_helpers import call_action, ns, is_error, is_ok, load_db_query
+from homehealth_helpers import call_action, ns, is_error, is_ok, load_db_query, seed_patient
+from erpclaw_lib.query import Q, P, Table
+from erpclaw_lib.seam import table_exists
 
 mod = load_db_query()
+
+
+def _care_plan_row(conn, plan_id):
+    t = Table("healthclaw_care_plan")
+    q = Q.from_(t).select(t.star).where(t.id == P())
+    return dict(conn.execute(q.get_sql(), (plan_id,)).fetchone())
+
+
+def _care_plan_snapshot(conn):
+    t = Table("healthclaw_care_plan")
+    q = Q.from_(t).select(t.star)
+    return sorted(json.dumps(dict(r), sort_keys=True, default=str) for r in conn.execute(q.get_sql()).fetchall())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -189,13 +204,223 @@ class TestCarePlan:
         assert isinstance(result["frequency"], dict)
         assert isinstance(result["goals"], list)
 
-    def test_list_care_plans(self, conn, env):
+    def test_list_care_plans(self, conn, env, db_path):
+        assert table_exists("healthclaw_care_plan", db_path)
+        first = call_action(mod.homehealth_add_care_plan, conn, ns(
+            patient_id=env["patient_id"],
+            company_id=env["company_id"],
+            certifying_physician_id=env["physician_id"],
+            start_of_care="2026-03-01",
+            certification_period_start="2026-03-01",
+            certification_period_end="2026-05-01",
+            frequency='{"skilled_nursing": "3x/week"}',
+            goals='["Improve mobility"]',
+            notes="first plan",
+            limit=50, offset=0,
+        ))
+        assert is_ok(first), first
+        second = call_action(mod.homehealth_add_care_plan, conn, ns(
+            patient_id=env["patient_id"],
+            company_id=env["company_id"],
+            certifying_physician_id=None,
+            start_of_care="2026-05-01",
+            certification_period_start="2026-05-01",
+            certification_period_end="2026-07-01",
+            frequency='{"pt": "2x/week"}',
+            goals='["Pain management"]',
+            notes="second plan",
+            limit=50, offset=0,
+        ))
+        assert is_ok(second), second
+        other_patient = seed_patient(conn, env["company_id"], "Other", "Patient")
+        other = call_action(mod.homehealth_add_care_plan, conn, ns(
+            patient_id=other_patient,
+            company_id=env["company_id"],
+            certifying_physician_id=None,
+            start_of_care="2026-06-01",
+            certification_period_start="2026-06-01",
+            certification_period_end="2026-08-01",
+            frequency=None, goals=None, notes=None,
+            limit=50, offset=0,
+        ))
+        assert is_ok(other), other
+        before = _care_plan_snapshot(conn)
         result = call_action(mod.homehealth_list_care_plans, conn, ns(
             patient_id=env["patient_id"],
             plan_status=None,
             limit=50, offset=0,
         ))
         assert is_ok(result), result
+        assert result["total_count"] == 2
+        assert result["limit"] == 50
+        assert result["offset"] == 0
+        assert result["has_more"] is False
+        assert [r["id"] for r in result["rows"]] == [second["id"], first["id"]]
+        stored_first = _care_plan_row(conn, first["id"])
+        assert stored_first["patient_id"] == env["patient_id"]
+        assert stored_first["company_id"] == env["company_id"]
+        assert stored_first["start_of_care"] == "2026-03-01"
+        assert stored_first["certification_period_start"] == "2026-03-01"
+        assert stored_first["certification_period_end"] == "2026-05-01"
+        assert stored_first["frequency"] == '{"skilled_nursing": "3x/week"}'
+        assert stored_first["goals"] == '["Improve mobility"]'
+        assert stored_first["plan_status"] == "active"
+        assert stored_first["notes"] == "first plan"
+        stored_second = _care_plan_row(conn, second["id"])
+        assert stored_second["patient_id"] == env["patient_id"]
+        assert stored_second["start_of_care"] == "2026-05-01"
+        assert stored_second["certification_period_start"] == "2026-05-01"
+        assert stored_second["certification_period_end"] == "2026-07-01"
+        assert stored_second["frequency"] == '{"pt": "2x/week"}'
+        assert stored_second["goals"] == '["Pain management"]'
+        assert stored_second["plan_status"] == "active"
+        assert stored_second["notes"] == "second plan"
+        by_id = {r["id"]: r for r in result["rows"]}
+        for plan_id, stored in ((first["id"], stored_first), (second["id"], stored_second)):
+            assert by_id[plan_id]["patient_id"] == stored["patient_id"]
+            assert by_id[plan_id]["company_id"] == stored["company_id"]
+            assert by_id[plan_id]["start_of_care"] == stored["start_of_care"]
+            assert by_id[plan_id]["certification_period_start"] == stored["certification_period_start"]
+            assert by_id[plan_id]["certification_period_end"] == stored["certification_period_end"]
+            assert by_id[plan_id]["frequency"] == stored["frequency"]
+            assert by_id[plan_id]["goals"] == stored["goals"]
+            assert by_id[plan_id]["plan_status"] == stored["plan_status"]
+        assert other["id"] not in by_id
+        assert _care_plan_snapshot(conn) == before
+        # This action is a read-only listing: it reaches no ledger table, so no
+        # two-leg balance assertion can hold for it.
+
+    def test_list_care_plans_filters_by_plan_status(self, conn, env):
+        active = call_action(mod.homehealth_add_care_plan, conn, ns(
+            patient_id=env["patient_id"],
+            company_id=env["company_id"],
+            certifying_physician_id=None,
+            start_of_care="2026-03-01",
+            certification_period_start="2026-03-01",
+            certification_period_end="2026-05-01",
+            frequency=None, goals=None, notes=None,
+            limit=50, offset=0,
+        ))
+        assert is_ok(active), active
+        moving = call_action(mod.homehealth_add_care_plan, conn, ns(
+            patient_id=env["patient_id"],
+            company_id=env["company_id"],
+            certifying_physician_id=None,
+            start_of_care="2026-04-01",
+            certification_period_start="2026-04-01",
+            certification_period_end="2026-06-01",
+            frequency=None, goals=None, notes=None,
+            limit=50, offset=0,
+        ))
+        assert is_ok(moving), moving
+        upd = call_action(mod.homehealth_update_care_plan, conn, ns(
+            care_plan_id=moving["id"],
+            certification_period_start=None,
+            certification_period_end=None,
+            plan_status="discharged",
+            frequency=None, goals=None, notes=None,
+            limit=50, offset=0,
+        ))
+        assert is_ok(upd), upd
+        before = _care_plan_snapshot(conn)
+        discharged = call_action(mod.homehealth_list_care_plans, conn, ns(
+            patient_id=env["patient_id"],
+            plan_status="discharged",
+            limit=50, offset=0,
+        ))
+        assert is_ok(discharged), discharged
+        assert discharged["total_count"] == 1
+        assert [r["id"] for r in discharged["rows"]] == [moving["id"]]
+        stored = _care_plan_row(conn, moving["id"])
+        assert stored["plan_status"] == "discharged"
+        assert discharged["rows"][0]["plan_status"] == stored["plan_status"] == "discharged"
+        assert discharged["rows"][0]["start_of_care"] == stored["start_of_care"] == "2026-04-01"
+        still_active = call_action(mod.homehealth_list_care_plans, conn, ns(
+            patient_id=env["patient_id"],
+            plan_status="active",
+            limit=50, offset=0,
+        ))
+        assert is_ok(still_active), still_active
+        assert still_active["total_count"] == 1
+        assert [r["id"] for r in still_active["rows"]] == [active["id"]]
+        assert _care_plan_snapshot(conn) == before
+
+    def test_list_care_plans_pagination(self, conn, env):
+        made = []
+        for start in ("2026-03-01", "2026-04-01", "2026-05-01"):
+            res = call_action(mod.homehealth_add_care_plan, conn, ns(
+                patient_id=env["patient_id"],
+                company_id=env["company_id"],
+                certifying_physician_id=None,
+                start_of_care=start,
+                certification_period_start=start,
+                certification_period_end="2026-08-01",
+                frequency=None, goals=None, notes=None,
+                limit=50, offset=0,
+            ))
+            assert is_ok(res), res
+            made.append((start, res["id"]))
+        before = _care_plan_snapshot(conn)
+        page1 = call_action(mod.homehealth_list_care_plans, conn, ns(
+            patient_id=env["patient_id"],
+            plan_status=None,
+            limit=2, offset=0,
+        ))
+        assert is_ok(page1), page1
+        assert page1["total_count"] == 3
+        assert page1["has_more"] is True
+        assert [r["id"] for r in page1["rows"]] == [made[2][1], made[1][1]]
+        page2 = call_action(mod.homehealth_list_care_plans, conn, ns(
+            patient_id=env["patient_id"],
+            plan_status=None,
+            limit=2, offset=2,
+        ))
+        assert is_ok(page2), page2
+        assert page2["total_count"] == 3
+        assert page2["has_more"] is False
+        assert [r["id"] for r in page2["rows"]] == [made[0][1]]
+        stored = _care_plan_row(conn, made[0][1])
+        assert page2["rows"][0]["start_of_care"] == stored["start_of_care"] == "2026-03-01"
+        assert _care_plan_snapshot(conn) == before
+
+    def test_list_care_plans_unknown_filter_returns_empty_and_writes_nothing(self, conn, env):
+        seeded = call_action(mod.homehealth_add_care_plan, conn, ns(
+            patient_id=env["patient_id"],
+            company_id=env["company_id"],
+            certifying_physician_id=None,
+            start_of_care="2026-03-01",
+            certification_period_start="2026-03-01",
+            certification_period_end="2026-05-01",
+            frequency=None, goals=None, notes=None,
+            limit=50, offset=0,
+        ))
+        assert is_ok(seeded), seeded
+        before = _care_plan_snapshot(conn)
+        missing_patient = call_action(mod.homehealth_list_care_plans, conn, ns(
+            patient_id=str(uuid.uuid4()),
+            plan_status=None,
+            limit=50, offset=0,
+        ))
+        assert is_ok(missing_patient), missing_patient
+        assert missing_patient["total_count"] == 0
+        assert missing_patient["rows"] == []
+        assert missing_patient["has_more"] is False
+        assert missing_patient["limit"] == 50
+        assert missing_patient["offset"] == 0
+        unknown_status = call_action(mod.homehealth_list_care_plans, conn, ns(
+            patient_id=env["patient_id"],
+            plan_status="no-such-status",
+            limit=50, offset=0,
+        ))
+        assert is_ok(unknown_status), unknown_status
+        assert unknown_status["total_count"] == 0
+        assert unknown_status["rows"] == []
+        assert unknown_status["has_more"] is False
+        assert _care_plan_snapshot(conn) == before
+        # list-care-plans declares no required flag and never reports an error for
+        # filter values, so there is no input-refusal path to exercise; an unknown
+        # filter truthfully returning zero rows with a byte-identical table is the
+        # nearest refusal analogue and proves the read half-writes nothing.
 
 
 # ─────────────────────────────────────────────────────────────────────────────

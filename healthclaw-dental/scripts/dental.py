@@ -17,10 +17,12 @@ try:
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row, now as sql_now
     from erpclaw_lib.vendor.pypika.terms import LiteralValue
 except ImportError:
     pass
+
+SKILL = "healthclaw-dental"
 
 
 # ---- Helpers ----------------------------------------------------------------
@@ -114,7 +116,7 @@ def add_tooth_chart_entry(conn, args):
         args.noted_date, getattr(args, "noted_by_id", None),
         "active", getattr(args, "notes", None), now, now,
     ))
-    audit(conn, "healthclaw_tooth_chart", entry_id, "dental-add-tooth-chart-entry", args.company_id)
+    audit(conn, SKILL, "dental-add-tooth-chart-entry", "healthclaw_tooth_chart", entry_id)
     conn.commit()
     ok({"id": entry_id, "tooth_number": args.tooth_number, "condition": args.condition})
 
@@ -148,10 +150,10 @@ def update_tooth_chart_entry(conn, args):
 
     if not updates:
         err("No fields to update")
-    updates.append("updated_at = datetime('now')")
+    updates.append(f"updated_at = {sql_now()}")
     params.append(entry_id)
     conn.execute(f"UPDATE healthclaw_tooth_chart SET {', '.join(updates)} WHERE id = ?", params)
-    audit(conn, "healthclaw_tooth_chart", entry_id, "dental-update-tooth-chart-entry", getattr(args, "company_id", None))
+    audit(conn, SKILL, "dental-update-tooth-chart-entry", "healthclaw_tooth_chart", entry_id)
     conn.commit()
     ok({"id": entry_id, "updated_fields": changed})
 
@@ -230,7 +232,7 @@ def add_dental_procedure(conn, args):
         tooth_number, surface, quadrant, args.procedure_date, fee, "planned",
         getattr(args, "notes", None), now, now,
     ))
-    audit(conn, "healthclaw_dental_procedure", proc_id, "dental-add-dental-procedure", args.company_id)
+    audit(conn, SKILL, "dental-add-dental-procedure", "healthclaw_dental_procedure", proc_id)
     conn.commit()
     ok({"id": proc_id, "cdt_code": args.cdt_code, "fee": fee})
 
@@ -315,7 +317,7 @@ def add_treatment_plan(conn, args):
         args.plan_date, phases, estimated_total, insurance_estimate, patient_estimate,
         "proposed", getattr(args, "notes", None), now, now,
     ))
-    audit(conn, "healthclaw_treatment_plan", plan_id, "dental-add-treatment-plan", args.company_id)
+    audit(conn, SKILL, "dental-add-treatment-plan", "healthclaw_treatment_plan", plan_id)
     conn.commit()
     ok({"id": plan_id, "plan_name": args.plan_name, "estimated_total": estimated_total})
 
@@ -362,10 +364,10 @@ def update_treatment_plan(conn, args):
 
     if not updates:
         err("No fields to update")
-    updates.append("updated_at = datetime('now')")
+    updates.append(f"updated_at = {sql_now()}")
     params.append(plan_id)
     conn.execute(f"UPDATE healthclaw_treatment_plan SET {', '.join(updates)} WHERE id = ?", params)
-    audit(conn, "healthclaw_treatment_plan", plan_id, "dental-update-treatment-plan", getattr(args, "company_id", None))
+    audit(conn, SKILL, "dental-update-treatment-plan", "healthclaw_treatment_plan", plan_id)
     conn.commit()
     ok({"id": plan_id, "updated_fields": changed})
 
@@ -446,7 +448,7 @@ def add_perio_exam(conn, args):
         getattr(args, "recession_data", None) or "{}", getattr(args, "plaque_score", None),
         getattr(args, "notes", None), "complete", now, now,
     ))
-    audit(conn, "healthclaw_perio_exam", exam_id, "dental-add-perio-exam", args.company_id)
+    audit(conn, SKILL, "dental-add-perio-exam", "healthclaw_perio_exam", exam_id)
     conn.commit()
     ok({"id": exam_id, "exam_date": args.exam_date})
 

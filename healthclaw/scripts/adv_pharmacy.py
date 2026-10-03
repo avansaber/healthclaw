@@ -21,6 +21,8 @@ try:
 except ImportError:
     pass
 
+SKILL = "healthclaw"
+
 ENTITY_PREFIXES.setdefault("healthclaw_prescription", "RX-")
 ENTITY_PREFIXES.setdefault("healthclaw_dispense_log", "DISP-")
 
@@ -84,7 +86,7 @@ def add_medication(conn, args):
          unit_price, quantity_on_hand, reorder_level, 1,
          getattr(args, "notes", None), _ts, _ts)
     )
-    audit(conn, "healthclaw_medication", med_id, "health-add-medication", args.company_id)
+    audit(conn, SKILL, "health-add-medication", "healthclaw_medication", med_id)
     conn.commit()
     ok({"id": med_id, "name": args.name, "dea_schedule": dea_schedule, "unit_price": unit_price})
 
@@ -173,7 +175,7 @@ def update_medication(conn, args):
     data["updated_at"] = now()
     sql, params = dynamic_update("healthclaw_medication", data, {"id": med_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_medication", med_id, "health-update-medication", getattr(args, "company_id", None))
+    audit(conn, SKILL, "health-update-medication", "healthclaw_medication", med_id)
     conn.commit()
     ok({"id": med_id, "updated_fields": changed})
 
@@ -218,7 +220,7 @@ def add_prescription(conn, args):
          "active", args.prescribed_date, getattr(args, "expiry_date", None),
          getattr(args, "notes", None), _ts, _ts)
     )
-    audit(conn, "healthclaw_prescription", rx_id, "health-add-prescription", args.company_id)
+    audit(conn, SKILL, "health-add-prescription", "healthclaw_prescription", rx_id)
     conn.commit()
     ok({"id": rx_id, "rx_number": rx_number, "medication_id": args.medication_id,
         "rx_status": "active"})
@@ -329,7 +331,7 @@ def fill_prescription(conn, args):
              getattr(args, "notes", None), _ts)
         )
 
-    audit(conn, "healthclaw_prescription", rx_id, "health-fill-prescription", rx["company_id"])
+    audit(conn, SKILL, "health-fill-prescription", "healthclaw_prescription", rx_id)
     conn.commit()
     ok({"id": rx_id, "dispense_log_id": disp_id, "quantity_dispensed": quantity,
         "rx_status": "filled"})
@@ -398,7 +400,7 @@ def refill_prescription(conn, args):
              getattr(args, "notes", None), _ts)
         )
 
-    audit(conn, "healthclaw_prescription", rx_id, "health-refill-prescription", rx["company_id"])
+    audit(conn, SKILL, "health-refill-prescription", "healthclaw_prescription", rx_id)
     conn.commit()
     ok({"id": rx_id, "dispense_log_id": disp_id, "refill_number": new_refills,
         "refills_remaining": rx["refills_authorized"] - new_refills,
@@ -434,7 +436,7 @@ def add_dispense_log(conn, args):
          getattr(args, "expiration_date", None),
          getattr(args, "notes", None), _ts)
     )
-    audit(conn, "healthclaw_dispense_log", disp_id, "health-add-dispense-log", args.company_id)
+    audit(conn, SKILL, "health-add-dispense-log", "healthclaw_dispense_log", disp_id)
     conn.commit()
     ok({"id": disp_id, "prescription_id": args.prescription_id, "quantity_dispensed": quantity})
 
@@ -573,7 +575,7 @@ def add_drug_interaction(conn, args):
         (di_id, args.company_id, args.medication_a_id, args.medication_b_id,
          severity, args.description, getattr(args, "recommendation", None), _ts)
     )
-    audit(conn, "healthclaw_drug_interaction", di_id, "health-add-drug-interaction", args.company_id)
+    audit(conn, SKILL, "health-add-drug-interaction", "healthclaw_drug_interaction", di_id)
     conn.commit()
     ok({"id": di_id, "company_id": args.company_id,
         "medication_a_id": args.medication_a_id,

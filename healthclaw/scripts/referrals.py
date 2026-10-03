@@ -27,6 +27,8 @@ try:
 except ImportError:
     pass
 
+SKILL = "healthclaw"
+
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 # ---------------------------------------------------------------------------
@@ -128,7 +130,7 @@ def add_referral(conn, args):
         getattr(args, "notes", None),
         args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_referral", ref_id, "health-add-referral", args.company_id)
+    audit(conn, SKILL, "health-add-referral", "healthclaw_referral", ref_id)
     conn.commit()
     ok({"id": ref_id, "naming_series": naming, "referred_to_provider": referred_to_provider, "status": "pending"})
 
@@ -204,7 +206,7 @@ def update_referral(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_referral", data, {"id": ref_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_referral", ref_id, "health-update-referral", None, {"updated_fields": changed})
+    audit(conn, SKILL, "health-update-referral", "healthclaw_referral", ref_id, new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": ref_id, "updated_fields": changed})
 
@@ -358,7 +360,7 @@ def add_prior_auth(conn, args):
         getattr(args, "notes", None),
         args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_prior_auth", auth_id, "health-add-prior-auth", args.company_id)
+    audit(conn, SKILL, "health-add-prior-auth", "healthclaw_prior_auth", auth_id)
     conn.commit()
     ok({"id": auth_id, "naming_series": naming, "service_type": service_type, "status": "pending"})
 
@@ -419,7 +421,7 @@ def update_prior_auth(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_prior_auth", data, {"id": auth_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_prior_auth", auth_id, "health-update-prior-auth", None, {"updated_fields": changed})
+    audit(conn, SKILL, "health-update-prior-auth", "healthclaw_prior_auth", auth_id, new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": auth_id, "updated_fields": changed})
 
@@ -555,7 +557,7 @@ def add_auth_usage(conn, args):
         getattr(args, "notes", None),
         now,
     ))
-    audit(conn, "healthclaw_auth_usage", au_id, "health-add-auth-usage", None)
+    audit(conn, SKILL, "health-add-auth-usage", "healthclaw_auth_usage", au_id)
     conn.commit()
     ok({"id": au_id, "prior_auth_id": prior_auth_id, "usage_date": usage_date})
 

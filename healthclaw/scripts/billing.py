@@ -30,6 +30,8 @@ except ImportError:
 
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+SKILL = "healthclaw"
+
 # ---------------------------------------------------------------------------
 # Validation constants
 # ---------------------------------------------------------------------------
@@ -98,7 +100,7 @@ def add_fee_schedule(conn, args):
         getattr(args, "expiration_date", None),
         "active", args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_fee_schedule", fs_id, "health-add-fee-schedule", args.company_id)
+    audit(conn, SKILL, "health-add-fee-schedule", "healthclaw_fee_schedule", fs_id)
     conn.commit()
     ok({"id": fs_id, "name": name, "status": "active"})
 
@@ -141,7 +143,7 @@ def update_fee_schedule(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_fee_schedule", data, {"id": fs_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_fee_schedule", fs_id, "health-update-fee-schedule", None, {"updated_fields": changed})
+    audit(conn, SKILL, "health-update-fee-schedule", "healthclaw_fee_schedule", fs_id, new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": fs_id, "updated_fields": changed})
 
@@ -218,7 +220,7 @@ def add_fee_schedule_item(conn, args):
         getattr(args, "modifier", None),
         now, now,
     ))
-    audit(conn, "healthclaw_fee_schedule_item", fsi_id, "health-add-fee-schedule-item", None)
+    audit(conn, SKILL, "health-add-fee-schedule-item", "healthclaw_fee_schedule_item", fsi_id)
     conn.commit()
     ok({"id": fsi_id, "fee_schedule_id": fs_id, "cpt_code": cpt_code})
 
@@ -315,7 +317,7 @@ def add_charge(conn, args):
         getattr(args, "notes", None),
         args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_charge", charge_id, "health-add-charge", args.company_id)
+    audit(conn, SKILL, "health-add-charge", "healthclaw_charge", charge_id)
     conn.commit()
     ok({"id": charge_id, "naming_series": naming, "cpt_code": cpt_code, "status": "unbilled"})
 
@@ -437,7 +439,7 @@ def add_claim(conn, args):
         getattr(args, "notes", None),
         args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_claim", claim_id, "health-add-claim", args.company_id)
+    audit(conn, SKILL, "health-add-claim", "healthclaw_claim", claim_id)
     conn.commit()
     ok({"id": claim_id, "naming_series": naming, "claim_date": claim_date, "claim_status": "draft"})
 
@@ -518,7 +520,7 @@ def update_claim(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_claim", data, {"id": claim_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_claim", claim_id, "health-update-claim", None, {"updated_fields": changed})
+    audit(conn, SKILL, "health-update-claim", "healthclaw_claim", claim_id, new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": claim_id, "updated_fields": changed})
 
@@ -932,7 +934,7 @@ def submit_claim(conn, args):
         data={"claim_status": "submitted", "updated_at": sql_now()},
         where={"id": P()})
     conn.execute(sql, (claim_id,))
-    audit(conn, "healthclaw_claim", claim_id, "health-submit-claim", None)
+    audit(conn, SKILL, "health-submit-claim", "healthclaw_claim", claim_id)
     conn.commit()
     ok({"id": claim_id, "claim_status": "submitted", "line_count": line_count, "scrub_warnings": scrub_warnings})
 
@@ -977,7 +979,7 @@ def add_claim_line(conn, args):
         getattr(args, "remark_codes", None),
         now, now,
     ))
-    audit(conn, "healthclaw_claim_line", cl_id, "health-add-claim-line", None)
+    audit(conn, SKILL, "health-add-claim-line", "healthclaw_claim_line", cl_id)
     conn.commit()
     ok({"id": cl_id, "claim_id": claim_id, "charge_id": charge_id, "cpt_code": cpt_code})
 
@@ -1073,7 +1075,7 @@ def add_payment_posting(conn, args):
         getattr(args, "notes", None),
         args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_payment_posting", pp_id, "health-add-payment-posting", args.company_id)
+    audit(conn, SKILL, "health-add-payment-posting", "healthclaw_payment_posting", pp_id)
     conn.commit()
     ok({"id": pp_id, "posting_type": posting_type, "amount": str(round_currency(to_decimal(amount)))})
 
@@ -1179,8 +1181,7 @@ def record_denial(conn, args):
 
     sql, params = dynamic_update("healthclaw_claim", data, {"id": claim_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_claim", claim_id, "health-record-denial", None,
-          {"denial_category": denial_category, "denial_code": denial_code})
+    audit(conn, SKILL, "health-record-denial", "healthclaw_claim", claim_id, new_values={"denial_category": denial_category, "denial_code": denial_code})
     conn.commit()
     ok({"id": claim_id, "claim_status": "denied", "denial_category": denial_category,
         "denial_code": denial_code, "denial_date": denial_date})
@@ -1222,7 +1223,7 @@ def submit_appeal(conn, args):
 
     sql, params = dynamic_update("healthclaw_claim", data, {"id": claim_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_claim", claim_id, "health-submit-appeal", None)
+    audit(conn, SKILL, "health-submit-appeal", "healthclaw_claim", claim_id)
     conn.commit()
     ok({"id": claim_id, "claim_status": "appealed", "appeal_submitted_date": now[:10]})
 
@@ -1267,8 +1268,7 @@ def resolve_appeal(conn, args):
 
     sql, params = dynamic_update("healthclaw_claim", data, {"id": claim_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_claim", claim_id, "health-resolve-appeal", None,
-          {"appeal_outcome": appeal_outcome})
+    audit(conn, SKILL, "health-resolve-appeal", "healthclaw_claim", claim_id, new_values={"appeal_outcome": appeal_outcome})
     conn.commit()
     ok({"id": claim_id, "claim_status": new_status, "appeal_outcome": appeal_outcome,
         "appeal_resolved_date": now[:10]})
@@ -1496,7 +1496,7 @@ def auto_crossover_claim(conn, args):
         str(round_currency(remaining)),
         None, "pending", args.company_id, now,
     ))
-    audit(conn, "healthclaw_crossover_claim", xover_id, "health-auto-crossover-claim", args.company_id)
+    audit(conn, SKILL, "health-auto-crossover-claim", "healthclaw_crossover_claim", xover_id)
     conn.commit()
     ok({
         "id": xover_id,
@@ -1656,7 +1656,7 @@ def generate_patient_statement(conn, args):
         str(round_currency(balance_due)),
         "generated", args.company_id, now,
     ))
-    audit(conn, "healthclaw_patient_statement", stmt_id, "health-generate-patient-statement", args.company_id)
+    audit(conn, SKILL, "health-generate-patient-statement", "healthclaw_patient_statement", stmt_id)
     conn.commit()
     ok({
         "id": stmt_id,
@@ -1752,7 +1752,7 @@ def add_payment_plan(conn, args):
         str(round_currency(total_dec)),
         "active", args.company_id, now,
     ))
-    audit(conn, "healthclaw_payment_plan", plan_id, "health-add-payment-plan", args.company_id)
+    audit(conn, SKILL, "health-add-payment-plan", "healthclaw_payment_plan", plan_id)
     conn.commit()
     ok({
         "id": plan_id,
@@ -1853,8 +1853,7 @@ def record_plan_payment(conn, args):
 
     sql, params = dynamic_update("healthclaw_payment_plan", data, {"id": plan_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_payment_plan", plan_id, "health-record-plan-payment", None,
-          {"payment_amount": str(round_currency(payment_amount))})
+    audit(conn, SKILL, "health-record-plan-payment", "healthclaw_payment_plan", plan_id, new_values={"payment_amount": str(round_currency(payment_amount))})
     conn.commit()
     ok({
         "id": plan_id,

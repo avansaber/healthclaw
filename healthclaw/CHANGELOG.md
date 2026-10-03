@@ -2,7 +2,7 @@
 
 All notable changes to the HealthClaw skill.
 
-## [Unreleased] — M33 feature-completion (B11)
+## [Unreleased] — feature completion
 
 ### Fixed
 - **`health-check-drug-interaction` no longer returns a false safety clearance

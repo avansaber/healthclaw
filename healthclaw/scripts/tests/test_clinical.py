@@ -23,7 +23,30 @@ Actions tested:
 import pytest
 from health_helpers import call_action, ns, is_error, is_ok, load_db_query
 
+from erpclaw_lib.query import Field, P, Q, Table, fn
+
 mod = load_db_query()
+
+
+def _read_row(conn, table, row_id):
+    """Read one stored row back through a PyPika-built query."""
+    t = Table(table)
+    row = conn.execute(
+        Q.from_(t).select(t.star).where(Field("id") == P()).get_sql(),
+        (row_id,),
+    ).fetchone()
+    assert row is not None, f"expected a row in {table} id={row_id}"
+    return dict(row)
+
+
+def _table_count(conn, table):
+    t = Table(table)
+    return conn.execute(
+        Q.from_(t).select(fn.Count("*")).get_sql()).fetchone()[0]
+
+
+def _refusal_message(result):
+    return result.get("message", "") + result.get("error", "")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -268,6 +291,13 @@ class TestPrescription:
             limit=50, offset=0,
         ))
         assert is_ok(add_res)
+        # Behavioural: the update must rewrite the stored prescription row,
+        # not just return an ok envelope. Read the row before and after
+        # through PyPika-built queries, and cross-check through list.
+        before = _read_row(conn, "healthclaw_prescription", add_res["id"])
+        assert before["status"] == "active"
+        assert before["discontinued_reason"] is None
+
         result = call_action(mod.health_update_prescription, conn, ns(
             prescription_id=add_res["id"],
             medication_name=None, ndc_code=None, dosage=None,
@@ -280,6 +310,69 @@ class TestPrescription:
             limit=50, offset=0,
         ))
         assert is_ok(result), result
+        assert set(result["updated_fields"]) == {
+            "status", "discontinued_reason"}
+
+        after = _read_row(conn, "healthclaw_prescription", add_res["id"])
+        assert (after["status"],
+                after["discontinued_reason"]) == (
+            "discontinued", "Patient intolerance")
+        for col in ("id", "naming_series", "encounter_id", "patient_id",
+                    "prescriber_id", "medication_name", "dosage", "frequency",
+                    "route", "quantity", "refills", "company_id",
+                    "created_at"):
+            assert after[col] == before[col], col
+
+        listed = call_action(mod.health_list_prescriptions, conn, ns(
+            encounter_id=env["encounter_id"],
+            patient_id=None, rx_status="discontinued",
+            limit=50, offset=0,
+        ))
+        assert is_ok(listed), listed
+        assert [r["id"] for r in listed["rows"]] == [add_res["id"]]
+        assert listed["rows"][0]["discontinued_reason"] == (
+            "Patient intolerance")
+
+        # This action writes only its own row (plus an audit row); it does
+        # not reach the general ledger, so there are no legs to assert.
+        assert _table_count(conn, "gl_entry") == 0
+
+    def test_update_prescription_refusal_writes_nothing(self, conn, env):
+        add_res = call_action(mod.health_add_prescription, conn, ns(
+            company_id=env["company_id"],
+            encounter_id=env["encounter_id"],
+            patient_id=env["patient_id"],
+            prescriber_id=env["provider_id"],
+            medication_name="Loratadine",
+            ndc_code=None, dosage="10mg", frequency="daily",
+            route="oral", quantity="30", refills="1",
+            daw=None, rx_start_date="2026-03-15", rx_end_date=None,
+            controlled_schedule=None, pharmacy_notes=None,
+            rx_status=None, discontinued_reason=None, notes=None,
+            limit=50, offset=0,
+        ))
+        assert is_ok(add_res)
+        before = _read_row(conn, "healthclaw_prescription", add_res["id"])
+        count_before = _table_count(conn, "healthclaw_prescription")
+
+        result = call_action(mod.health_update_prescription, conn, ns(
+            prescription_id=add_res["id"],
+            medication_name=None, ndc_code=None, dosage=None,
+            frequency=None, route=None, quantity=None, refills=None,
+            daw=None, rx_start_date=None, rx_end_date=None,
+            controlled_schedule=None, pharmacy_notes=None,
+            rx_status="bogus",
+            discontinued_reason=None,
+            notes=None,
+            limit=50, offset=0,
+        ))
+        assert is_error(result)
+        assert _refusal_message(result) == (
+            "Invalid status: bogus. Must be one of: active, completed, "
+            "discontinued, cancelled, on_hold")
+        assert _read_row(conn, "healthclaw_prescription",
+                         add_res["id"]) == before
+        assert _table_count(conn, "healthclaw_prescription") == count_before
 
     def test_list_prescriptions(self, conn, env):
         result = call_action(mod.health_list_prescriptions, conn, ns(

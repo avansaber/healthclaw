@@ -27,6 +27,8 @@ try:
 except ImportError:
     pass
 
+SKILL = "healthclaw"
+
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 # ---------------------------------------------------------------------------
@@ -116,7 +118,7 @@ def add_lab_order(conn, args):
         getattr(args, "notes", None),
         args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_lab_order", lab_order_id, "health-add-lab-order", args.company_id)
+    audit(conn, SKILL, "health-add-lab-order", "healthclaw_lab_order", lab_order_id)
     conn.commit()
     ok({"id": lab_order_id, "naming_series": naming, "order_date": order_date, "status": "ordered"})
 
@@ -166,7 +168,7 @@ def update_lab_order(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_lab_order", data, {"id": lab_order_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_lab_order", lab_order_id, "health-update-lab-order", None, {"updated_fields": changed})
+    audit(conn, SKILL, "health-update-lab-order", "healthclaw_lab_order", lab_order_id, new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": lab_order_id, "updated_fields": changed})
 
@@ -282,7 +284,7 @@ def add_lab_test(conn, args):
         getattr(args, "cpt_code", None),
         "pending", now, now,
     ))
-    audit(conn, "healthclaw_lab_test", lt_id, "health-add-lab-test", None)
+    audit(conn, SKILL, "health-add-lab-test", "healthclaw_lab_test", lt_id)
     conn.commit()
     ok({"id": lt_id, "lab_order_id": lab_order_id, "test_code": test_code, "status": "pending"})
 
@@ -375,7 +377,7 @@ def add_lab_result(conn, args):
         performed_by_id, verified_by_id,
         getattr(args, "notes", None), now,
     ))
-    audit(conn, "healthclaw_lab_result", lr_id, "health-add-lab-result", None)
+    audit(conn, SKILL, "health-add-lab-result", "healthclaw_lab_result", lr_id)
     conn.commit()
     ok({"id": lr_id, "lab_test_id": lab_test_id, "component_name": component_name, "flag": flag})
 
@@ -478,7 +480,7 @@ def add_imaging_order(conn, args):
         getattr(args, "notes", None),
         args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_imaging_order", img_order_id, "health-add-imaging-order", args.company_id)
+    audit(conn, SKILL, "health-add-imaging-order", "healthclaw_imaging_order", img_order_id)
     conn.commit()
     ok({"id": img_order_id, "naming_series": naming, "modality": modality, "body_part": body_part, "status": "ordered"})
 
@@ -540,7 +542,7 @@ def update_imaging_order(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_imaging_order", data, {"id": img_order_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_imaging_order", img_order_id, "health-update-imaging-order", None, {"updated_fields": changed})
+    audit(conn, SKILL, "health-update-imaging-order", "healthclaw_imaging_order", img_order_id, new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": img_order_id, "updated_fields": changed})
 
@@ -637,7 +639,7 @@ def add_imaging_result(conn, args):
         getattr(args, "addendum", None),
         now, now,
     ))
-    audit(conn, "healthclaw_imaging_result", ir_id, "health-add-imaging-result", None)
+    audit(conn, SKILL, "health-add-imaging-result", "healthclaw_imaging_result", ir_id)
     conn.commit()
     ok({"id": ir_id, "imaging_order_id": imaging_order_id, "report_date": report_date, "status": "preliminary"})
 
@@ -686,7 +688,7 @@ def update_imaging_result(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_imaging_result", data, {"id": ir_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_imaging_result", ir_id, "health-update-imaging-result", None, {"updated_fields": changed})
+    audit(conn, SKILL, "health-update-imaging-result", "healthclaw_imaging_result", ir_id, new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": ir_id, "updated_fields": changed})
 

@@ -26,6 +26,8 @@ try:
 except ImportError:
     pass
 
+SKILL = "healthclaw"
+
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 # ---------------------------------------------------------------------------
@@ -84,7 +86,7 @@ def add_formulary(conn, args):
         getattr(args, "expiration_date", None),
         "active", args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_formulary", formulary_id, "health-add-formulary", args.company_id)
+    audit(conn, SKILL, "health-add-formulary", "healthclaw_formulary", formulary_id)
     conn.commit()
     ok({"id": formulary_id, "name": name, "status": "active"})
 
@@ -121,7 +123,7 @@ def update_formulary(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_formulary", data, {"id": formulary_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_formulary", formulary_id, "health-update-formulary", None, {"updated_fields": changed})
+    audit(conn, SKILL, "health-update-formulary", "healthclaw_formulary", formulary_id, new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": formulary_id, "updated_fields": changed})
 
@@ -210,7 +212,7 @@ def add_formulary_item(conn, args):
         getattr(args, "max_daily_dose", None),
         "active", now, now,
     ))
-    audit(conn, "healthclaw_formulary_item", fi_id, "health-add-formulary-item", None)
+    audit(conn, SKILL, "health-add-formulary-item", "healthclaw_formulary_item", fi_id)
     conn.commit()
     ok({"id": fi_id, "formulary_id": formulary_id, "item_id": item_id})
 
@@ -266,7 +268,7 @@ def update_formulary_item(conn, args):
     data["updated_at"] = sql_now()
     sql, params = dynamic_update("healthclaw_formulary_item", data, {"id": fi_id})
     conn.execute(sql, params)
-    audit(conn, "healthclaw_formulary_item", fi_id, "health-update-formulary-item", None, {"updated_fields": changed})
+    audit(conn, SKILL, "health-update-formulary-item", "healthclaw_formulary_item", fi_id, new_values={"updated_fields": changed})
     conn.commit()
     ok({"id": fi_id, "updated_fields": changed})
 
@@ -365,7 +367,7 @@ def add_dispensing(conn, args):
         getattr(args, "notes", None),
         args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_dispensing", disp_id, "health-add-dispensing", args.company_id)
+    audit(conn, SKILL, "health-add-dispensing", "healthclaw_dispensing", disp_id)
     conn.commit()
     ok({"id": disp_id, "naming_series": naming, "prescription_id": prescription_id, "status": "dispensed"})
 
@@ -462,7 +464,7 @@ def cancel_dispensing(conn, args):
         data={"status": "voided", "updated_at": sql_now()},
         where={"id": P()})
     conn.execute(sql, (disp_id,))
-    audit(conn, "healthclaw_dispensing", disp_id, "health-cancel-dispensing", None)
+    audit(conn, SKILL, "health-cancel-dispensing", "healthclaw_dispensing", disp_id)
     conn.commit()
     ok({"id": disp_id, "status": "voided"})
 

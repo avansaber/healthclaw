@@ -20,6 +20,8 @@ try:
 except ImportError:
     pass
 
+SKILL = "healthclaw"
+
 _now_iso = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 # ---------------------------------------------------------------------------
@@ -79,7 +81,7 @@ def add_provider_credential(conn, args):
         getattr(args, "notes", None),
         args.company_id, now, now,
     ))
-    audit(conn, "healthclaw_provider_credential", cred_id, "health-add-provider-credential", args.company_id)
+    audit(conn, SKILL, "health-add-provider-credential", "healthclaw_provider_credential", cred_id)
     conn.commit()
     ok({"id": cred_id, "provider_id": args.provider_id, "credential_type": credential_type, "credential_status": "active"})
 

@@ -17,9 +17,11 @@ try:
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row, now as sql_now
 except ImportError:
     pass
+
+SKILL = "healthclaw-homehealth"
 
 
 # ---- Helpers ----------------------------------------------------------------
@@ -94,7 +96,7 @@ def add_home_visit(conn, args):
         getattr(args, "travel_time_minutes", None), mileage,
         visit_status, getattr(args, "notes", None), now, now,
     ))
-    audit(conn, "healthclaw_home_visit", visit_id, "homehealth-add-home-visit", args.company_id)
+    audit(conn, SKILL, "homehealth-add-home-visit", "healthclaw_home_visit", visit_id)
     conn.commit()
     ok({"id": visit_id, "visit_type": args.visit_type, "visit_date": args.visit_date,
         "initial_status": visit_status})
@@ -142,10 +144,10 @@ def update_home_visit(conn, args):
 
     if not updates:
         err("No fields to update")
-    updates.append("updated_at = datetime('now')")
+    updates.append(f"updated_at = {sql_now()}")
     params.append(visit_id)
     conn.execute(f"UPDATE healthclaw_home_visit SET {', '.join(updates)} WHERE id = ?", params)
-    audit(conn, "healthclaw_home_visit", visit_id, "homehealth-update-home-visit", getattr(args, "company_id", None))
+    audit(conn, SKILL, "homehealth-update-home-visit", "healthclaw_home_visit", visit_id)
     conn.commit()
     ok({"id": visit_id, "updated_fields": changed})
 
@@ -226,7 +228,7 @@ def add_care_plan(conn, args):
         args.start_of_care, args.certification_period_start, args.certification_period_end,
         frequency, goals, "active", getattr(args, "notes", None), now, now,
     ))
-    audit(conn, "healthclaw_care_plan", plan_id, "homehealth-add-care-plan", args.company_id)
+    audit(conn, SKILL, "homehealth-add-care-plan", "healthclaw_care_plan", plan_id)
     conn.commit()
     ok({"id": plan_id, "patient_id": args.patient_id, "start_of_care": args.start_of_care,
         "initial_status": "active"})
@@ -271,10 +273,10 @@ def update_care_plan(conn, args):
 
     if not updates:
         err("No fields to update")
-    updates.append("updated_at = datetime('now')")
+    updates.append(f"updated_at = {sql_now()}")
     params.append(plan_id)
     conn.execute(f"UPDATE healthclaw_care_plan SET {', '.join(updates)} WHERE id = ?", params)
-    audit(conn, "healthclaw_care_plan", plan_id, "homehealth-update-care-plan", getattr(args, "company_id", None))
+    audit(conn, SKILL, "homehealth-update-care-plan", "healthclaw_care_plan", plan_id)
     conn.commit()
     ok({"id": plan_id, "updated_fields": changed})
 
@@ -365,7 +367,7 @@ def add_oasis_assessment(conn, args):
         args.assessment_type, args.assessment_date,
         m_items, getattr(args, "notes", None), now, now,
     ))
-    audit(conn, "healthclaw_oasis_assessment", assessment_id, "homehealth-add-oasis-assessment", args.company_id)
+    audit(conn, SKILL, "homehealth-add-oasis-assessment", "healthclaw_oasis_assessment", assessment_id)
     conn.commit()
     ok({"id": assessment_id, "assessment_type": args.assessment_type,
         "assessment_date": args.assessment_date})
@@ -446,7 +448,7 @@ def add_aide_assignment(conn, args):
         supervisor_id, getattr(args, "supervision_due_date", None),
         "active", getattr(args, "notes", None), now, now,
     ))
-    audit(conn, "healthclaw_aide_assignment", assign_id, "homehealth-add-aide-assignment", args.company_id)
+    audit(conn, SKILL, "homehealth-add-aide-assignment", "healthclaw_aide_assignment", assign_id)
     conn.commit()
     ok({"id": assign_id, "aide_id": args.aide_id, "assignment_start": args.assignment_start,
         "initial_status": "active"})
@@ -500,10 +502,10 @@ def update_aide_assignment(conn, args):
 
     if not updates:
         err("No fields to update")
-    updates.append("updated_at = datetime('now')")
+    updates.append(f"updated_at = {sql_now()}")
     params.append(assign_id)
     conn.execute(f"UPDATE healthclaw_aide_assignment SET {', '.join(updates)} WHERE id = ?", params)
-    audit(conn, "healthclaw_aide_assignment", assign_id, "homehealth-update-aide-assignment", getattr(args, "company_id", None))
+    audit(conn, SKILL, "homehealth-update-aide-assignment", "healthclaw_aide_assignment", assign_id)
     conn.commit()
     ok({"id": assign_id, "updated_fields": changed})
 

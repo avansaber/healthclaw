@@ -17,9 +17,11 @@ try:
     from erpclaw_lib.decimal_utils import to_decimal, round_currency
     from erpclaw_lib.response import ok, err, row_to_dict
     from erpclaw_lib.audit import audit
-    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row
+    from erpclaw_lib.query import Q, P, Table, Field, fn, Order, insert_row, update_row, now as sql_now
 except ImportError:
     pass
+
+SKILL = "healthclaw-mental"
 
 
 # ---- Helpers ----------------------------------------------------------------
@@ -149,7 +151,7 @@ def add_therapy_session(conn, args):
         getattr(args, "duration_minutes", None), getattr(args, "session_number", None),
         getattr(args, "notes", None), status, now, now,
     ))
-    audit(conn, "healthclaw_therapy_session", session_id, "mentalhealth-add-therapy-session", args.company_id)
+    audit(conn, SKILL, "mentalhealth-add-therapy-session", "healthclaw_therapy_session", session_id)
     conn.commit()
     ok({"id": session_id, "session_type": args.session_type, "session_status": status})
 
@@ -192,10 +194,10 @@ def update_therapy_session(conn, args):
 
     if not updates:
         err("No fields to update")
-    updates.append("updated_at = datetime('now')")
+    updates.append(f"updated_at = {sql_now()}")
     params.append(session_id)
     conn.execute(f"UPDATE healthclaw_therapy_session SET {', '.join(updates)} WHERE id = ?", params)
-    audit(conn, "healthclaw_therapy_session", session_id, "mentalhealth-update-therapy-session", getattr(args, "company_id", None))
+    audit(conn, SKILL, "mentalhealth-update-therapy-session", "healthclaw_therapy_session", session_id)
     conn.commit()
     ok({"id": session_id, "updated_fields": changed})
 
@@ -303,7 +305,7 @@ def add_assessment(conn, args):
         responses_raw, score, severity,
         args.administered_date, getattr(args, "notes", None), now, now,
     ))
-    audit(conn, "healthclaw_assessment", assessment_id, "mentalhealth-add-assessment", args.company_id)
+    audit(conn, SKILL, "mentalhealth-add-assessment", "healthclaw_assessment", assessment_id)
     conn.commit()
     result = {"id": assessment_id, "instrument": args.instrument}
     if score is not None:
@@ -443,7 +445,7 @@ def add_treatment_goal(conn, args):
         getattr(args, "current_measure", None), "active",
         getattr(args, "notes", None), now, now,
     ))
-    audit(conn, "healthclaw_treatment_goal", goal_id, "mentalhealth-add-treatment-goal", args.company_id)
+    audit(conn, SKILL, "mentalhealth-add-treatment-goal", "healthclaw_treatment_goal", goal_id)
     conn.commit()
     ok({"id": goal_id, "goal_description": args.goal_description, "goal_status": "active"})
 
@@ -478,10 +480,10 @@ def update_treatment_goal(conn, args):
 
     if not updates:
         err("No fields to update")
-    updates.append("updated_at = datetime('now')")
+    updates.append(f"updated_at = {sql_now()}")
     params.append(goal_id)
     conn.execute(f"UPDATE healthclaw_treatment_goal SET {', '.join(updates)} WHERE id = ?", params)
-    audit(conn, "healthclaw_treatment_goal", goal_id, "mentalhealth-update-treatment-goal", getattr(args, "company_id", None))
+    audit(conn, SKILL, "mentalhealth-update-treatment-goal", "healthclaw_treatment_goal", goal_id)
     conn.commit()
     ok({"id": goal_id, "updated_fields": changed})
 
@@ -555,7 +557,7 @@ def add_group_session(conn, args):
         getattr(args, "duration_minutes", None), getattr(args, "notes", None),
         status, now, now,
     ))
-    audit(conn, "healthclaw_group_session", session_id, "mentalhealth-add-group-session", args.company_id)
+    audit(conn, SKILL, "mentalhealth-add-group-session", "healthclaw_group_session", session_id)
     conn.commit()
     ok({"id": session_id, "group_name": args.group_name, "session_status": status})
 
@@ -607,10 +609,10 @@ def update_group_session(conn, args):
 
     if not updates:
         err("No fields to update")
-    updates.append("updated_at = datetime('now')")
+    updates.append(f"updated_at = {sql_now()}")
     params.append(session_id)
     conn.execute(f"UPDATE healthclaw_group_session SET {', '.join(updates)} WHERE id = ?", params)
-    audit(conn, "healthclaw_group_session", session_id, "mentalhealth-update-group-session", getattr(args, "company_id", None))
+    audit(conn, SKILL, "mentalhealth-update-group-session", "healthclaw_group_session", session_id)
     conn.commit()
     ok({"id": session_id, "updated_fields": changed})
 
