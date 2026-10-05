@@ -53,6 +53,7 @@ from rcm import ACTIONS as RCM_ACTIONS
 from compliance import ACTIONS as COMPLIANCE_ACTIONS
 from provider_mgmt import ACTIONS as PROVIDER_MGMT_ACTIONS
 from adv_reports_v2 import ACTIONS as ADV_REPORTS_V2_ACTIONS
+from accumulator_340b import ACTIONS as ACCUM_340B_ACTIONS
 
 # ---------------------------------------------------------------------------
 # Merge all domain actions into one router
@@ -86,6 +87,9 @@ ACTIONS.update(PROVIDER_MGMT_ACTIONS)
 
 # Merge Phase 11 reports & misc (aging, superbill, stubs, growth chart, etc.)
 ACTIONS.update(ADV_REPORTS_V2_ACTIONS)
+
+# Merge 340B accumulator register (local record only, no GL posting)
+ACTIONS.update(ACCUM_340B_ACTIONS)
 
 ACTIONS["status"] = lambda conn, args: ok({
     "skill": SKILL,
@@ -469,6 +473,26 @@ def main():
     parser.add_argument("--claim-number")
     parser.add_argument("--charge-ids")
     parser.add_argument("--adjustment")
+    parser.add_argument("--receivable-account-id")
+    parser.add_argument("--revenue-account-id")
+    parser.add_argument("--approval-date")
+    parser.add_argument("--approval-reference")
+    parser.add_argument("--charity-amount")
+    parser.add_argument("--charity-expense-account-id")
+    parser.add_argument("--cost-center-id")
+
+    # ── 340B accumulator register ──
+    parser.add_argument("--drug-identifier")
+    parser.add_argument("--drug-code")
+    parser.add_argument("--dispense-date")
+    parser.add_argument("--qualification-reason")
+    parser.add_argument("--evidence-reference")
+    parser.add_argument("--acquisition-cost")
+    parser.add_argument("--ceiling-price")
+    parser.add_argument("--ceiling-value")
+    parser.add_argument("--idempotency-key")
+    parser.add_argument("--accumulation-id")
+    parser.add_argument("--dispense-id")
 
     # ── ADV_REPORTS domain (healthclaw-advanced) ──────────────
     parser.add_argument("--date-from")

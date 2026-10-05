@@ -1,6 +1,6 @@
 """HealthClaw Advanced — billing domain module.
 
-Actions for procedure codes, charges, claims, and payment postings.
+Actions for procedure codes, charges, claims, payment postings, and charity-care adjustments.
 Imported by db_query.py (unified router).
 """
 import json
@@ -481,6 +481,340 @@ def aging_report(conn, args):
 
 
 # ---------------------------------------------------------------------------
+# 13. post-patient-revenue
+# ---------------------------------------------------------------------------
+def post_patient_revenue(conn, args):
+    """Post one submitted claim's recognized patient revenue to the GL.
+
+    Debit the receivable account and credit the revenue account for the
+    claim's exact total charged, through the shared GL posting seam in one
+    transaction. Retries are idempotent through the GL voucher linkage on
+    the claim: an identical retry returns the original receipt, while a
+    retry naming different accounts is refused. Records audit linkage on
+    the claim and returns the claim ID, exact amount, posting date, and
+    GL entry IDs.
+    """
+    for req in ("company_id", "claim_id", "posting_date",
+                "receivable_account_id", "revenue_account_id"):
+        if not getattr(args, req, None):
+            err(f"--{req.replace('_', '-')} is required")
+
+    company_id = args.company_id
+    claim_id = args.claim_id
+    posting_date = args.posting_date
+    receivable_account_id = args.receivable_account_id
+    revenue_account_id = args.revenue_account_id
+
+    claim_row = conn.execute(
+        Q.from_(Table("healthclaw_claim")).select(Table("healthclaw_claim").star).where(Field("id") == P()).get_sql(),
+        (claim_id,)).fetchone()
+    if not claim_row:
+        err(f"Claim {claim_id} not found")
+    claim = row_to_dict(claim_row)
+
+    if claim.get("company_id") != company_id:
+        err(f"Claim {claim_id} belongs to company {claim.get('company_id')}, not {company_id}")
+
+    if claim.get("claim_status") != "submitted":
+        err(f"Claim {claim_id} must be submitted to post patient revenue (status: {claim.get('claim_status')})")
+
+    raw_total = claim.get("total_charged") or "0"
+    if to_decimal(raw_total) == Decimal("0"):
+        raw_total = claim.get("total_charge") or "0"
+    amount = to_decimal(raw_total or "0")
+    if amount <= Decimal("0"):
+        err(f"Claim {claim_id} has no positive total charged to post")
+    amount_str = str(round_currency(amount))
+
+    prior = conn.execute(
+        Q.from_(Table("gl_entry")).select(Field("id"), Field("account_id"), Field("debit"), Field("credit"), Field("posting_date")).where(Field("voucher_type") == P()).where(Field("voucher_id") == P()).where(Field("entry_set") == P()).where(Field("is_cancelled") == P()).get_sql(),
+        ("journal_entry", claim_id, "primary", 0)).fetchall()
+    if prior:
+        debit_legs = [row_to_dict(r) for r in prior if to_decimal(dict(r).get("debit") or "0") > Decimal("0")]
+        credit_legs = [row_to_dict(r) for r in prior if to_decimal(dict(r).get("credit") or "0") > Decimal("0")]
+        posted_receivable = debit_legs[0]["account_id"] if len(debit_legs) == 1 else None
+        posted_revenue = credit_legs[0]["account_id"] if len(credit_legs) == 1 else None
+        posted_amount = to_decimal(debit_legs[0]["debit"]) if len(debit_legs) == 1 else None
+        posted_date = row_to_dict(prior[0]).get("posting_date")
+        posted_ids = [row_to_dict(r)["id"] for r in prior]
+        if (posted_receivable == receivable_account_id
+                and posted_revenue == revenue_account_id
+                and posted_amount is not None and posted_amount == amount):
+            ok({"id": claim_id, "claim_id": claim_id, "amount": amount_str,
+                "total_charged": amount_str, "posting_date": posted_date,
+                "gl_entry_ids": posted_ids, "gl_entry_count": len(posted_ids)})
+        conn.rollback()
+        err(f"Claim {claim_id} already posted with different accounts; refusing changed-account retry")
+
+    def _load_account(account_id, label, root_type):
+        account_row = conn.execute(
+            Q.from_(Table("account")).select(Table("account").star).where(Field("id") == P()).get_sql(),
+            (account_id,)).fetchone()
+        if not account_row:
+            err(f"{label} account {account_id} not found")
+        account = row_to_dict(account_row)
+        if account.get("company_id") != company_id:
+            err(f"{label} account {account_id} belongs to company {account.get('company_id')}, not {company_id}")
+        if account.get("is_group"):
+            err(f"{label} account {account.get('name')} is a group account; post to a ledger account")
+        if account.get("disabled"):
+            err(f"{label} account {account.get('name')} is disabled")
+        if (account.get("root_type") or "") != root_type:
+            err(f"{label} account {account.get('name')} must be a {root_type} account")
+        return account
+
+    _load_account(receivable_account_id, "Receivable", "asset")
+    _load_account(revenue_account_id, "Revenue", "income")
+
+    cost_center_id = getattr(args, "cost_center_id", None)
+    if cost_center_id:
+        cc_row = conn.execute(
+            Q.from_(Table("cost_center")).select(Table("cost_center").star).where(Field("id") == P()).get_sql(),
+            (cost_center_id,)).fetchone()
+        if not cc_row:
+            err(f"Cost center {cost_center_id} not found")
+        cc = row_to_dict(cc_row)
+        if cc.get("company_id") != company_id:
+            err(f"Cost center {cost_center_id} belongs to company {cc.get('company_id')}, not {company_id}")
+        if cc.get("is_group"):
+            err(f"Cost center {cc.get('name')} is a group cost center")
+    else:
+        co_row = conn.execute(
+            Q.from_(Table("company")).select(Field("default_cost_center_id")).where(Field("id") == P()).get_sql(),
+            (company_id,)).fetchone()
+        if co_row and dict(co_row).get("default_cost_center_id"):
+            cost_center_id = dict(co_row)["default_cost_center_id"]
+    if not cost_center_id:
+        cc_row = conn.execute(
+            Q.from_(Table("cost_center")).select(Field("id")).where(Field("company_id") == P()).where(Field("is_group") == P()).limit(1).get_sql(),
+            (company_id, 0)).fetchone()
+        if cc_row:
+            cost_center_id = dict(cc_row)["id"]
+
+    try:
+        from erpclaw_lib.gl_posting import insert_gl_entries
+    except ImportError:
+        conn.rollback()
+        err("GL posting is unavailable for patient revenue")
+
+    entries = [
+        {"account_id": receivable_account_id, "debit": amount_str, "credit": "0",
+         "party_type": "customer", "party_id": claim.get("patient_id")},
+        {"account_id": revenue_account_id, "debit": "0", "credit": amount_str,
+         "cost_center_id": cost_center_id},
+    ]
+    try:
+        gl_ids = insert_gl_entries(
+            conn, entries,
+            voucher_type="journal_entry",
+            voucher_id=claim_id,
+            posting_date=posting_date,
+            company_id=company_id,
+            remarks=f"Patient revenue for claim {claim_id}",
+            entry_set="primary",
+        )
+    except Exception as e:
+        conn.rollback()
+        err(f"GL posting failed for patient revenue {claim_id}: {e}")
+
+    audit(conn, SKILL, "health-post-patient-revenue", "healthclaw_claim", claim_id,
+          new_values={"company_id": company_id, "total_charged": amount_str,
+                      "posting_date": posting_date,
+                      "receivable_account_id": receivable_account_id,
+                      "revenue_account_id": revenue_account_id,
+                      "gl_entry_ids": gl_ids})
+    conn.commit()
+    ok({"id": claim_id, "claim_id": claim_id, "amount": amount_str,
+        "total_charged": amount_str, "posting_date": posting_date,
+        "gl_entry_ids": gl_ids, "gl_entry_count": len(gl_ids)})
+
+# ---------------------------------------------------------------------------
+# 14. apply-charity-care
+# ---------------------------------------------------------------------------
+def apply_charity_care(conn, args):
+    """Apply one approved charity-care adjustment against a submitted claim.
+
+    Debit the charity-care expense account and credit the receivable account
+    for the exact approved amount, through the shared GL posting seam in one
+    transaction. The claim must be submitted and belong to the posting
+    company, and the call must carry an explicit approval date and approval
+    reference. Both accounts must be active ledger accounts of that company:
+    the receivable an asset and the charity-care account an expense. The
+    amount must be an exact positive Decimal within the claim balance (total
+    charged less paid, adjusted, and previously approved charity care).
+    Retries naming the same claim plus approval reference are idempotent by
+    the stored adjustment row: an identical retry returns the original
+    receipt, while a changed-amount or changed-account retry is refused.
+    Records audit linkage on the adjustment and returns the claim ID, exact
+    amount, remaining balance, and GL entry IDs.
+    """
+    for req in ("company_id", "claim_id", "approval_date", "charity_amount",
+                "approval_reference", "receivable_account_id",
+                "charity_expense_account_id"):
+        if not getattr(args, req, None):
+            err(f"--{req.replace('_', '-')} is required")
+
+    company_id = args.company_id
+    claim_id = args.claim_id
+    approval_date = args.approval_date
+    approval_reference = args.approval_reference
+    receivable_account_id = args.receivable_account_id
+    charity_expense_account_id = args.charity_expense_account_id
+
+    try:
+        amount = round_currency(to_decimal(args.charity_amount))
+    except (TypeError, ValueError):
+        err(f"Invalid charity-care amount: {args.charity_amount!r}")
+    if amount <= Decimal("0"):
+        err(f"Charity-care amount must be positive, got {args.charity_amount!r}")
+    amount_str = str(round_currency(amount))
+
+    claim_row = conn.execute(
+        Q.from_(Table("healthclaw_claim")).select(Table("healthclaw_claim").star).where(Field("id") == P()).get_sql(),
+        (claim_id,)).fetchone()
+    if not claim_row:
+        err(f"Claim {claim_id} not found")
+    claim = row_to_dict(claim_row)
+
+    if claim.get("company_id") != company_id:
+        err(f"Claim {claim_id} belongs to company {claim.get('company_id')}, not {company_id}")
+
+    if claim.get("claim_status") != "submitted":
+        err(f"Claim {claim_id} must be submitted to apply charity care (status: {claim.get('claim_status')})")
+
+    history_rows = conn.execute(
+        Q.from_(Table("healthclaw_charity_care_adjustment")).select(
+            Field("id"), Field("approval_reference"), Field("amount"),
+            Field("approval_date"), Field("receivable_account_id"),
+            Field("charity_expense_account_id"), Field("gl_entry_ids")).where(Field("claim_id") == P()).get_sql(),
+        (claim_id,)).fetchall()
+    history = [row_to_dict(r) for r in history_rows]
+    prior_total = sum((to_decimal(h.get("amount") or "0") for h in history), Decimal("0"))
+
+    raw_total = claim.get("total_charged") or "0"
+    if to_decimal(raw_total) == Decimal("0"):
+        raw_total = claim.get("total_charge") or "0"
+    claim_total = to_decimal(raw_total or "0")
+    claim_consumed = to_decimal(claim.get("total_paid") or "0") + to_decimal(claim.get("total_adjustment") or "0")
+
+    existing = next((h for h in history if h.get("approval_reference") == approval_reference), None)
+    if existing is not None:
+        if to_decimal(existing.get("amount") or "0") != amount:
+            conn.rollback()
+            err(f"Claim {claim_id} already has charity-care adjustment {approval_reference} for a different amount ({existing.get('amount')}); refusing changed-amount retry")
+        if (existing.get("receivable_account_id") != receivable_account_id
+                or existing.get("charity_expense_account_id") != charity_expense_account_id):
+            conn.rollback()
+            err(f"Claim {claim_id} already has charity-care adjustment {approval_reference} with different accounts; refusing changed-account retry")
+        stored_ids = json.loads(existing.get("gl_entry_ids") or "[]")
+        remaining_str = str(round_currency(claim_total - claim_consumed - prior_total))
+        ok({"id": existing.get("id"), "claim_id": claim_id, "amount": existing.get("amount"),
+            "remaining_balance": remaining_str, "approval_reference": approval_reference,
+            "approval_date": existing.get("approval_date"),
+            "gl_entry_ids": stored_ids, "gl_entry_count": len(stored_ids)})
+
+    def _load_account(account_id, label, root_type):
+        account_row = conn.execute(
+            Q.from_(Table("account")).select(Table("account").star).where(Field("id") == P()).get_sql(),
+            (account_id,)).fetchone()
+        if not account_row:
+            err(f"{label} account {account_id} not found")
+        account = row_to_dict(account_row)
+        if account.get("company_id") != company_id:
+            err(f"{label} account {account_id} belongs to company {account.get('company_id')}, not {company_id}")
+        if account.get("is_group"):
+            err(f"{label} account {account.get('name')} is a group account; post to a ledger account")
+        if account.get("disabled"):
+            err(f"{label} account {account.get('name')} is disabled")
+        if (account.get("root_type") or "") != root_type:
+            err(f"{label} account {account.get('name')} must be a {root_type} account")
+        return account
+
+    _load_account(receivable_account_id, "Receivable", "asset")
+    _load_account(charity_expense_account_id, "Charity-care", "expense")
+
+    balance = claim_total - claim_consumed - prior_total
+    if amount > balance:
+        err(f"Charity-care amount {amount_str} exceeds claim {claim_id} balance {str(round_currency(balance))}")
+    remaining_str = str(round_currency(balance - amount))
+
+    cost_center_id = getattr(args, "cost_center_id", None)
+    if cost_center_id:
+        cc_row = conn.execute(
+            Q.from_(Table("cost_center")).select(Table("cost_center").star).where(Field("id") == P()).get_sql(),
+            (cost_center_id,)).fetchone()
+        if not cc_row:
+            err(f"Cost center {cost_center_id} not found")
+        cc = row_to_dict(cc_row)
+        if cc.get("company_id") != company_id:
+            err(f"Cost center {cost_center_id} belongs to company {cc.get('company_id')}, not {company_id}")
+        if cc.get("is_group"):
+            err(f"Cost center {cc.get('name')} is a group cost center")
+    else:
+        co_row = conn.execute(
+            Q.from_(Table("company")).select(Field("default_cost_center_id")).where(Field("id") == P()).get_sql(),
+            (company_id,)).fetchone()
+        if co_row and dict(co_row).get("default_cost_center_id"):
+            cost_center_id = dict(co_row)["default_cost_center_id"]
+    if not cost_center_id:
+        cc_row = conn.execute(
+            Q.from_(Table("cost_center")).select(Field("id")).where(Field("company_id") == P()).where(Field("is_group") == P()).limit(1).get_sql(),
+            (company_id, 0)).fetchone()
+        if cc_row:
+            cost_center_id = dict(cc_row)["id"]
+
+    try:
+        from erpclaw_lib.gl_posting import insert_gl_entries
+    except ImportError:
+        conn.rollback()
+        err("GL posting is unavailable for charity care")
+
+    adj_id = str(uuid.uuid4())
+    entries = [
+        {"account_id": charity_expense_account_id, "debit": amount_str, "credit": "0",
+         "cost_center_id": cost_center_id},
+        {"account_id": receivable_account_id, "debit": "0", "credit": amount_str,
+         "party_type": "customer", "party_id": claim.get("patient_id")},
+    ]
+    try:
+        gl_ids = insert_gl_entries(
+            conn, entries,
+            voucher_type="journal_entry",
+            voucher_id=adj_id,
+            posting_date=approval_date,
+            company_id=company_id,
+            remarks=f"Charity care for claim {claim_id} ref {approval_reference}",
+            entry_set="primary",
+        )
+    except Exception as e:
+        conn.rollback()
+        err(f"GL posting failed for charity care {claim_id} ref {approval_reference}: {e}")
+
+    _ts = _now_iso()
+    sql, _ = insert_row("healthclaw_charity_care_adjustment",
+        {"id": P(), "company_id": P(), "claim_id": P(), "approval_date": P(),
+         "approval_reference": P(), "amount": P(), "receivable_account_id": P(),
+         "charity_expense_account_id": P(), "gl_entry_ids": P(), "created_at": P()})
+    conn.execute(sql,
+        (adj_id, company_id, claim_id, approval_date, approval_reference,
+         amount_str, receivable_account_id, charity_expense_account_id,
+         json.dumps(gl_ids), _ts))
+
+    audit(conn, SKILL, "health-apply-charity-care", "healthclaw_charity_care_adjustment", adj_id,
+          new_values={"company_id": company_id, "claim_id": claim_id,
+                      "approval_date": approval_date,
+                      "approval_reference": approval_reference,
+                      "amount": amount_str, "remaining_balance": remaining_str,
+                      "receivable_account_id": receivable_account_id,
+                      "charity_expense_account_id": charity_expense_account_id,
+                      "gl_entry_ids": gl_ids})
+    conn.commit()
+    ok({"id": adj_id, "claim_id": claim_id, "amount": amount_str,
+        "remaining_balance": remaining_str, "approval_reference": approval_reference,
+        "approval_date": approval_date,
+        "gl_entry_ids": gl_ids, "gl_entry_count": len(gl_ids)})
+
+# ---------------------------------------------------------------------------
 # Action Router
 # ---------------------------------------------------------------------------
 ACTIONS = {
@@ -496,4 +830,6 @@ ACTIONS = {
     "health-adv-add-payment-posting": add_payment_posting,
     "health-adv-list-payment-postings": list_payment_postings,
     "health-aging-report": aging_report,
+    "health-post-patient-revenue": post_patient_revenue,
+    "health-apply-charity-care": apply_charity_care,
 }

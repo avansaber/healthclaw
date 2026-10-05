@@ -358,3 +358,174 @@ def test_batch_submit_claims_refuses_an_unknown_company(conn, env):
     assert is_error(r)
     assert _msg(r) == "Company no-such-company not found"
     assert _claim_row(conn, claim_id)["claim_status"] == "draft"
+
+
+# ---------------------------------------------------------------------------
+# health-generate-837-preview (X12 837 claim encoder v1, read-only preview)
+# ---------------------------------------------------------------------------
+
+def _preview_claim(conn, env, insurance_id, claim_type="professional",
+                   total="500.10", claim_number="CLM-837-001",
+                   payer_edi="EDI-610", filing="CI",
+                   claim_date="2026-03-20", stored_total=None):
+    r = call_action(ACTIONS["health-add-claim"], conn, ns(
+        company_id=env["company_id"], patient_id=env["patient_id"],
+        encounter_id=env["encounter_id"], insurance_id=insurance_id,
+        claim_date=claim_date, total_charge=total, claim_type=claim_type,
+        billing_provider_id=env["provider_id"],
+        rendering_provider_id=env["provider2_id"],
+        filing_indicator=filing))
+    assert is_ok(r), r
+    claim_id = r["id"]
+    if payer_edi is not None:
+        conn.execute(
+            "UPDATE healthclaw_claim SET payer_id_number = ? WHERE id = ?",
+            (payer_edi, claim_id))
+    if claim_number is not None:
+        conn.execute(
+            "UPDATE healthclaw_claim SET claim_number = ? WHERE id = ?",
+            (claim_number, claim_id))
+    if stored_total is not None:
+        conn.execute(
+            "UPDATE healthclaw_claim SET total_charge = ? WHERE id = ?",
+            (stored_total, claim_id))
+    conn.commit()
+    return claim_id
+
+
+def _preview_line(conn, claim_id, charge_id, cpt="99213", units="1",
+                  amount="500.10", line_number="1"):
+    r = call_action(ACTIONS["health-add-claim-line"], conn, ns(
+        claim_id=claim_id, charge_id=charge_id, cpt_code=cpt,
+        line_number=line_number, modifiers=None, diagnosis_pointers="1",
+        units=units, charge_amount=amount, allowed_amount=None,
+        paid_amount=None, adjustment_amount=None, patient_amount=None,
+        denial_reason=None, remark_codes=None))
+    assert is_ok(r), r
+    return r["id"]
+
+
+def _preview_call(conn, claim_id):
+    return call_action(ACTIONS["health-generate-837-preview"], conn,
+                       ns(claim_id=claim_id))
+
+
+def _table_counts(conn):
+    return (
+        conn.execute("SELECT COUNT(*) FROM healthclaw_claim").fetchone()[0],
+        conn.execute("SELECT COUNT(*) FROM healthclaw_claim_line").fetchone()[0],
+        conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0],
+    )
+
+
+def test_generate_837_preview_professional_500_10_repeatable(conn, env):
+    ins = _insurance(conn, env)
+    claim_id = _preview_claim(conn, env, ins, total="500.10")
+    _preview_line(conn, claim_id, _charge(conn, env), amount="500.10")
+
+    r1 = _preview_call(conn, claim_id)
+    assert is_ok(r1), r1
+    assert r1["claim_id"] == claim_id
+    assert r1["transaction_type"] == "837P"
+    assert r1["total_charge"] == "500.10"
+    assert "SV1" in r1["x12_preview"]
+    assert r1["x12_preview"].count("~") == r1["segment_count"]
+    assert r1["transmission_status"] == "not_sent"
+
+    import hashlib
+    assert (r1["sha256"]
+            == hashlib.sha256(r1["x12_preview"].encode("utf-8")).hexdigest())
+
+    r2 = _preview_call(conn, claim_id)
+    assert is_ok(r2), r2
+    assert r2["x12_preview"] == r1["x12_preview"]
+    assert r2["sha256"] == r1["sha256"]
+    assert _claim_row(conn, claim_id)["claim_status"] == "draft"
+    _no_ledger_rows(conn)
+
+
+def test_generate_837_preview_institutional_uses_sv2(conn, env):
+    ins = _insurance(conn, env)
+    claim_id = _preview_claim(conn, env, ins, claim_type="institutional",
+                              total="250.00", claim_number="CLM-837-002")
+    _preview_line(conn, claim_id, _charge(conn, env), amount="250.00")
+
+    r = _preview_call(conn, claim_id)
+    assert is_ok(r), r
+    assert r["transaction_type"] == "837I"
+    assert "SV2" in r["x12_preview"]
+    assert "SV1" not in r["x12_preview"]
+    assert r["total_charge"] == "250.00"
+    assert r["transmission_status"] == "not_sent"
+    assert _claim_row(conn, claim_id)["claim_status"] == "draft"
+
+
+def test_generate_837_preview_refuses_dental(conn, env):
+    ins = _insurance(conn, env)
+    claim_id = _preview_claim(conn, env, ins, claim_type="dental",
+                              claim_number="CLM-837-003")
+    _preview_line(conn, claim_id, _charge(conn, env))
+    before = (_table_counts(conn), dict(_claim_row(conn, claim_id)))
+
+    r = _preview_call(conn, claim_id)
+    assert is_error(r)
+    assert "dental" in _msg(r).lower()
+    assert _table_counts(conn) == before[0]
+    assert dict(_claim_row(conn, claim_id)) == before[1]
+
+
+def test_generate_837_preview_refuses_missing_payer_edi(conn, env):
+    ins = _insurance(conn, env)
+    claim_id = _preview_claim(conn, env, ins, payer_edi=None,
+                              claim_number="CLM-837-004")
+    _preview_line(conn, claim_id, _charge(conn, env))
+    before = (_table_counts(conn), dict(_claim_row(conn, claim_id)))
+
+    r = _preview_call(conn, claim_id)
+    assert is_error(r)
+    assert "payer_id_number" in _msg(r)
+    assert _table_counts(conn) == before[0]
+    assert dict(_claim_row(conn, claim_id)) == before[1]
+
+
+def test_generate_837_preview_refuses_nonfinite_total(conn, env):
+    ins = _insurance(conn, env)
+    claim_id = _preview_claim(conn, env, ins, claim_number="CLM-837-005",
+                              stored_total="Infinity")
+    _preview_line(conn, claim_id, _charge(conn, env))
+    before = (_table_counts(conn), dict(_claim_row(conn, claim_id)))
+
+    r = _preview_call(conn, claim_id)
+    assert is_error(r)
+    assert "total_charge" in _msg(r)
+    assert _table_counts(conn) == before[0]
+    assert dict(_claim_row(conn, claim_id)) == before[1]
+
+
+def test_generate_837_preview_refuses_claim_with_no_lines(conn, env):
+    ins = _insurance(conn, env)
+    claim_id = _preview_claim(conn, env, ins, claim_number="CLM-837-006")
+    before = (_table_counts(conn), dict(_claim_row(conn, claim_id)))
+
+    r = _preview_call(conn, claim_id)
+    assert is_error(r)
+    assert _table_counts(conn) == before[0]
+    assert dict(_claim_row(conn, claim_id)) == before[1]
+
+
+def test_generate_837_preview_never_sends_and_leaves_status(conn, env):
+    ins = _insurance(conn, env)
+    claim_id = _preview_claim(conn, env, ins, claim_number="CLM-837-007")
+    _preview_line(conn, claim_id, _charge(conn, env))
+
+    r = _preview_call(conn, claim_id)
+    assert is_ok(r), r
+    assert r["transmission_status"] == "not_sent"
+    assert _claim_row(conn, claim_id)["claim_status"] == "draft"
+
+    audits_before = conn.execute(
+        "SELECT COUNT(*) FROM audit_log").fetchone()[0]
+    r2 = _preview_call(conn, claim_id)
+    assert is_ok(r2), r2
+    assert conn.execute(
+        "SELECT COUNT(*) FROM audit_log").fetchone()[0] == audits_before

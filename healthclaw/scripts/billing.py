@@ -3,6 +3,7 @@
 Actions for the billing domain (6 tables, 16 actions).
 Imported by db_query.py (unified router).
 """
+import hashlib
 import json
 import os
 import sqlite3
@@ -937,6 +938,217 @@ def submit_claim(conn, args):
     audit(conn, SKILL, "health-submit-claim", "healthclaw_claim", claim_id)
     conn.commit()
     ok({"id": claim_id, "claim_status": "submitted", "line_count": line_count, "scrub_warnings": scrub_warnings})
+
+
+# ---------------------------------------------------------------------------
+# health-generate-837-preview (X12 837 claim encoder v1, read-only preview)
+# ---------------------------------------------------------------------------
+def generate_837_preview(conn, args):
+    """Deterministic X12 837 transaction-set preview for a claim.
+
+    Read only: performs SELECTs only. Never writes claim status, audit,
+    file, or transport rows, and never contacts a clearinghouse or payer.
+    """
+    claim_id = getattr(args, "claim_id", None)
+    if not claim_id:
+        err("--claim-id is required")
+
+    row = conn.execute(
+        Q.from_(Table("healthclaw_claim")).select(
+            Table("healthclaw_claim").star
+        ).where(Field("id") == P()).get_sql(),
+        (claim_id,)
+    ).fetchone()
+    if not row:
+        err(f"Claim {claim_id} not found")
+    claim = row_to_dict(row)
+
+    status = claim.get("claim_status")
+    if status not in ("draft", "submitted"):
+        err(f"Cannot generate 837 preview with status: {status}. "
+            "Must be draft or submitted")
+
+    claim_type = (claim.get("claim_type") or "").strip()
+    if not claim_type:
+        err("Missing required field: claim_type")
+    if claim_type == "dental":
+        err("Dental claims are not supported in 837 preview v1 "
+            "(claim_type: dental)")
+    if claim_type == "professional":
+        txn_type = "837P"
+    elif claim_type == "institutional":
+        txn_type = "837I"
+    else:
+        err(f"Unsupported claim_type: {claim_type}. "
+            "Must be professional or institutional")
+
+    def _missing(field, label):
+        err(f"Missing required field: {field} ({label})")
+
+    payer_edi = (claim.get("payer_id_number") or "").strip() \
+        if isinstance(claim.get("payer_id_number"), str) \
+        else claim.get("payer_id_number")
+    if payer_edi is None or (isinstance(payer_edi, str) and payer_edi.strip() == ""):
+        _missing("payer_id_number", "payer EDI ID")
+    payer_edi = str(payer_edi).strip()
+
+    claim_number = claim.get("claim_number")
+    if claim_number is None or (isinstance(claim_number, str) and claim_number.strip() == ""):
+        _missing("claim_number", "claim number")
+    claim_number = str(claim_number).strip()
+
+    claim_date = claim.get("claim_date")
+    if claim_date is None or (isinstance(claim_date, str) and claim_date.strip() == ""):
+        _missing("claim_date", "claim date")
+    claim_date = str(claim_date).strip()
+
+    filing_indicator = claim.get("filing_indicator")
+    if filing_indicator is None or (isinstance(filing_indicator, str) and filing_indicator.strip() == ""):
+        _missing("filing_indicator", "filing indicator")
+    filing_indicator = str(filing_indicator).strip()
+
+    patient_id = claim.get("patient_id")
+    if patient_id is None or (isinstance(patient_id, str) and patient_id.strip() == ""):
+        _missing("patient_id", "patient ID")
+    patient_id = str(patient_id).strip()
+
+    billing_provider_id = claim.get("billing_provider_id")
+    if billing_provider_id is None or (isinstance(billing_provider_id, str) and billing_provider_id.strip() == ""):
+        _missing("billing_provider_id", "billing provider ID")
+    billing_provider_id = str(billing_provider_id).strip()
+
+    rendering_provider_id = claim.get("rendering_provider_id")
+    if rendering_provider_id is None or (isinstance(rendering_provider_id, str) and rendering_provider_id.strip() == ""):
+        _missing("rendering_provider_id", "rendering provider ID")
+    rendering_provider_id = str(rendering_provider_id).strip()
+
+    def _blank(value):
+        return value is None or (isinstance(value, str) and value.strip() == "")
+
+    raw_total = claim.get("total_charge")
+    raw_alt = claim.get("total_charged")
+    candidate = raw_total if not _blank(raw_total) else raw_alt
+    if _blank(candidate):
+        _missing("total_charge", "total charge")
+    try:
+        total_dec = to_decimal(candidate)
+    except Exception:
+        err(f"Invalid total_charge '{candidate}': must be an exact decimal amount")
+    try:
+        alt_dec = to_decimal(raw_alt) if not _blank(raw_alt) else None
+    except Exception:
+        alt_dec = None
+    if alt_dec is not None and total_dec == Decimal("0") and alt_dec != Decimal("0"):
+        total_dec = alt_dec
+        candidate = raw_alt
+    if not total_dec.is_finite():
+        err(f"Invalid total_charge '{candidate}': amount must be finite")
+    if total_dec < Decimal("0"):
+        err(f"Invalid total_charge '{candidate}': amount must be nonnegative")
+    total_str = str(total_dec)
+
+    line_table = Table("healthclaw_claim_line")
+    q_lines = Q.from_(line_table).select(line_table.star).where(
+        line_table.claim_id == P()
+    ).orderby(line_table.line_number, order=Order.asc).orderby(line_table.id, order=Order.asc)
+    line_rows = conn.execute(q_lines.get_sql(), (claim_id,)).fetchall()
+    if len(line_rows) == 0:
+        err("Cannot generate 837 preview with no claim lines. "
+            "Add at least one claim line first.")
+
+    lines = []
+    for line_row in line_rows:
+        ld = row_to_dict(line_row)
+        line_id = ld.get("id")
+        code = ld.get("cpt_code") or ld.get("procedure_code")
+        code = str(code).strip() if code is not None else ""
+        if not code:
+            err(f"Claim line {line_id} missing required field: cpt_code "
+                "(CPT or procedure code)")
+        raw_units = ld.get("units")
+        if _blank(raw_units):
+            err(f"Claim line {line_id} missing required field: units (unit count)")
+        try:
+            units_dec = to_decimal(raw_units)
+        except Exception:
+            err(f"Claim line {line_id} has invalid units '{raw_units}': "
+                "must be a positive integer")
+        if (not units_dec.is_finite() or units_dec <= 0
+                or units_dec != units_dec.to_integral_value()):
+            err(f"Claim line {line_id} has invalid units '{raw_units}': "
+                "must be a positive integer")
+        units_int = int(units_dec)
+        raw_amount = ld.get("charge_amount")
+        if _blank(raw_amount):
+            err(f"Claim line {line_id} missing required field: charge_amount")
+        try:
+            amount_dec = to_decimal(raw_amount)
+        except Exception:
+            err(f"Claim line {line_id} has invalid charge_amount '{raw_amount}': "
+                "must be an exact decimal amount")
+        if not amount_dec.is_finite():
+            err(f"Claim line {line_id} has invalid charge_amount '{raw_amount}': "
+                "amount must be finite")
+        if amount_dec < Decimal("0"):
+            err(f"Claim line {line_id} has invalid charge_amount '{raw_amount}': "
+                "amount must be nonnegative")
+        pointers = ld.get("diagnosis_pointers")
+        pointers = str(pointers).strip() if pointers is not None else ""
+        modifiers = ld.get("modifiers")
+        modifiers = str(modifiers).strip() if modifiers is not None else ""
+        lines.append({
+            "id": line_id,
+            "code": code,
+            "units": units_int,
+            "amount": str(amount_dec),
+            "pointers": pointers,
+            "modifiers": modifiers,
+        })
+
+    place_of_service = claim.get("place_of_service") or "11"
+    place_of_service = str(place_of_service).strip() or "11"
+    date_compact = claim_date.replace("-", "").replace("/", "")
+    ctrl = "0001"
+
+    segments = []
+    segments.append(f"ST*837*{ctrl}")
+    segments.append(f"BHT*0019*00*{claim_number}*{date_compact}*CH")
+    segments.append(f"REF*TXN*{txn_type}")
+    segments.append(f"NM1*41*2*{billing_provider_id}")
+    segments.append(f"NM1*82*1*{rendering_provider_id}")
+    segments.append(f"NM1*QC*1*{patient_id}")
+    segments.append(f"NM1*PR*2*{payer_edi}")
+    segments.append(f"CLM*{claim_number}*{total_str}***{place_of_service}*{filing_indicator}")
+    diag_joined = "|".join(x["pointers"] for x in lines if x["pointers"])
+    segments.append(f"HI*{diag_joined}")
+    for num, line in enumerate(lines, start=1):
+        segments.append(f"LX*{num}")
+        if txn_type == "837P":
+            proc = f"{line['code']}:{line['modifiers']}" if line["modifiers"] else line["code"]
+            segments.append(f"SV1*HC:{proc}*{line['amount']}*UN*{line['units']}")
+        else:
+            segments.append(f"SV2*{line['code']}*{line['amount']}*UN*{line['units']}")
+    segment_count = len(segments) + 1
+    segments.append(f"SE*{segment_count}*{ctrl}")
+
+    x12_preview = "".join(seg + "~" for seg in segments)
+    sha256 = hashlib.sha256(x12_preview.encode("utf-8")).hexdigest()
+
+    ok({
+        "claim_id": claim_id,
+        "id": claim_id,
+        "transaction_type": txn_type,
+        "transaction_set": txn_type,
+        "segment_count": segment_count,
+        "total_charge": total_str,
+        "total_charge_amount": total_str,
+        "sha256": sha256,
+        "x12_sha256": sha256,
+        "transmission_status": "not_sent",
+        "x12_preview": x12_preview,
+        "x12": x12_preview,
+        "x12_text": x12_preview,
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -1919,6 +2131,7 @@ ACTIONS = {
     "health-list-claims": list_claims,
     "health-scrub-claim": scrub_claim,
     "health-submit-claim": submit_claim,
+    "health-generate-837-preview": generate_837_preview,
     "health-add-claim-line": add_claim_line,
     "health-list-claim-lines": list_claim_lines,
     "health-add-payment-posting": add_payment_posting,

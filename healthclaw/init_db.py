@@ -2,13 +2,14 @@
 """HealthClaw schema extension — adds domain tables to the shared database.
 
 AI-native hospital and multi-department healthcare ERP.
-59 tables across 13 domains:
+60 tables across 13 domains:
   Core (35 tables, 7 domains): patients, appointments, clinical, billing, inventory, lab, referrals
   Advanced (5 tables): medication, dispense log, procedure code, drug interaction, controlled substance log
   Payer management (4 tables, Phase 1 RCM): payer, eligibility check, ERA file, ERA claim detail
   Compliance (4 tables, Phase 2): PHI access log, good faith estimate, quality measure (+ result)
   Phase 8 Clinical Depth (4 tables): med_reconciliation, immunization, provider_credential, payer_enrollment
   Phase 11 Remaining (7 tables): statements, payment plans, BAA, breach, care team, crossover, scheduling rules
+  Charity care v1 (1 table): charity-care adjustment
 
 Prerequisite: ERPClaw init_db.py must have run first (creates foundation tables).
 Run: python3 init_db.py [db_path]
@@ -24,7 +25,7 @@ where SQLite does not.
 
 The pre-conversion docstring said "52 tables"; it counted neither the 4 payer
 tables nor the 4 compliance tables, and credited Phase 8 with 5 rather than 4.
-The installer creates 59 and always did — corrected here rather than carried.
+The installer creates 60 and always did. This count is corrected here rather than carried.
 """
 import importlib.util
 import os
@@ -1027,6 +1028,84 @@ Index("idx_hc_posting_patient", PAYMENT_POSTING.c.patient_id)
 Index("idx_hc_posting_type", PAYMENT_POSTING.c.posting_type)
 Index("idx_hc_posting_date", PAYMENT_POSTING.c.posting_date)
 Index("idx_hc_posting_payment", PAYMENT_POSTING.c.payment_entry_id)
+
+# Charity care v1: one approved adjustment against one submitted claim.
+# Idempotency key is (claim_id, approval_reference): an identical retry returns
+# the original receipt, while a changed-amount or changed-account retry is
+# refused. The GL legs for the adjustment carry the adjustment row id as their
+# voucher, so they never collide with the claim-level patient-revenue posting.
+CHARITY_CARE_ADJUSTMENT = Table(
+    "healthclaw_charity_care_adjustment", METADATA,
+    Column("id", Text, primary_key=True, nullable=True),
+    Column("company_id", Text,
+           ForeignKey("company.id"), nullable=False),
+    Column("claim_id", Text,
+           ForeignKey("healthclaw_claim.id"), nullable=False),
+    Column("approval_date", Text, nullable=False),
+    Column("approval_reference", Text, nullable=False),
+    Column("amount", Text, nullable=False,
+           server_default=text("'0.00'")),
+    Column("receivable_account_id", Text, nullable=False),
+    Column("charity_expense_account_id", Text, nullable=False),
+    Column("gl_entry_ids", Text),
+    Column("created_at", Text, server_default=now_default()),
+    UniqueConstraint("claim_id", "approval_reference",
+                     name="uq_healthclaw_charity_care_claim_ref"),
+)
+
+Index("idx_hc_charity_claim", CHARITY_CARE_ADJUSTMENT.c.claim_id)
+Index("idx_hc_charity_company", CHARITY_CARE_ADJUSTMENT.c.company_id)
+
+# 340B accumulator v1: local eligibility and accumulation register.
+# One qualified dispense row per validated administration. The register is a
+# local record only; it makes no legal eligibility determination and never
+# transmits a claim. Durable idempotency keys live in their own table so a
+# retry with the same key plus identical fields returns the original row
+# while a retry with the same key plus changed fields is refused.
+ACCUM_340B = Table(
+    "healthclaw_340b_accumulation", METADATA,
+    Column("id", Text, primary_key=True, nullable=True),
+    Column("company_id", Text,
+           ForeignKey("company.id"), nullable=False),
+    Column("encounter_id", Text,
+           ForeignKey("healthclaw_encounter.id"), nullable=False),
+    Column("patient_id", Text,
+           ForeignKey("healthclaw_patient.id")),
+    Column("drug_identifier", Text, nullable=False),
+    Column("quantity", Text, nullable=False,
+           server_default=text("'0'")),
+    Column("dispense_date", Text, nullable=False),
+    Column("qualification_reason", Text, nullable=False),
+    Column("evidence_reference", Text, nullable=False),
+    Column("acquisition_cost", Text, nullable=False,
+           server_default=text("'0.00'")),
+    Column("ceiling_price", Text, nullable=False,
+           server_default=text("'0.00'")),
+    Column("idempotency_key", Text),
+    Column("created_at", Text, server_default=now_default()),
+)
+
+Index("idx_hc_340b_company", ACCUM_340B.c.company_id)
+Index("idx_hc_340b_encounter", ACCUM_340B.c.encounter_id)
+Index("idx_hc_340b_dispense_date", ACCUM_340B.c.dispense_date)
+Index("idx_hc_340b_drug", ACCUM_340B.c.drug_identifier)
+
+IDEMPOTENCY_340B = Table(
+    "healthclaw_340b_idempotency_key", METADATA,
+    Column("id", Text, primary_key=True, nullable=True),
+    Column("company_id", Text,
+           ForeignKey("company.id"), nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("accumulation_id", Text,
+           ForeignKey("healthclaw_340b_accumulation.id"), nullable=False),
+    Column("request_hash", Text, nullable=False),
+    Column("created_at", Text, server_default=now_default()),
+    UniqueConstraint("company_id", "idempotency_key",
+                     name="uq_healthclaw_340b_company_key"),
+)
+
+Index("idx_hc_340b_idem_company", IDEMPOTENCY_340B.c.company_id)
+Index("idx_hc_340b_idem_accum", IDEMPOTENCY_340B.c.accumulation_id)
 
 # ==========================================================
 # DOMAIN 5: INVENTORY / PHARMACY (3 tables)

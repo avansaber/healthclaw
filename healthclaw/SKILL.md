@@ -1,7 +1,7 @@
 ---
 name: healthclaw
 version: 2.1.0
-description: AI-native healthcare ERP. 234 actions across 15 domains -- patients, appointments, clinical, billing, inventory, lab, referrals, advanced pharmacy, advanced lab, advanced billing, advanced reports, RCM, compliance, provider management, reports v2. HIPAA-friendly, ICD-10/CPT, insurance claims, prior auth, pharmacy/DEA, revenue cycle management.
+description: "AI-native healthcare ERP. 237 actions across 15 domains: patients, appointments, clinical, billing, inventory, lab, referrals, advanced pharmacy, advanced lab, advanced billing, advanced reports, RCM, compliance, provider management, reports v2. HIPAA-friendly, ICD-10/CPT, insurance claims, prior auth, pharmacy/DEA, revenue cycle management."
 author: AvanSaber
 homepage: https://github.com/avansaber/healthclaw
 source: https://github.com/avansaber/healthclaw
@@ -15,7 +15,6 @@ scripts:
   - scripts/db_query.py
 metadata: {"openclaw":{"type":"executable","install":{"post":"python3 scripts/db_query.py --action status"},"requires":{"bins":["python3"],"env":[],"optionalEnv":["ERPCLAW_DB_PATH"]},"os":["darwin","linux"]}}
 ---
-
 # healthclaw
 
 Healthcare Administrator for HealthClaw -- AI-native hospital/clinic ERP on ERPClaw.
@@ -23,7 +22,6 @@ Manages patients, appointments, encounters, vitals, diagnoses, prescriptions, pr
 billing (fee schedules, charges, CMS-1500/UB-04 claims), pharmacy (formulary, dispensing, DEA),
 lab/imaging, referrals, prior auth, RCM, compliance (HIPAA, BAA), and provider credentialing.
 All financials post to ERPClaw GL with double-entry accounting. Zero network calls.
-
 ### Skill Activation Triggers
 
 Activate when user mentions: patient, hospital, clinic, appointment, encounter, vitals,
@@ -31,13 +29,11 @@ diagnosis, ICD-10, prescription, medication, procedure, CPT, clinical note, SOAP
 imaging, x-ray, MRI, referral, prior authorization, insurance claim, billing, charge, formulary,
 dispensing, pharmacy, healthcare, medical, provider, check-in, check-out, waitlist, FHIR, payer,
 revenue cycle, credentialing, BAA, HIPAA, breach, PHI.
-
 ### Setup
 ```
 python3 {baseDir}/../erpclaw/scripts/db_query.py --action initialize-database
 python3 {baseDir}/scripts/db_query.py --action status
 ```
-
 ## Quick Start
 
 ```
@@ -50,7 +46,7 @@ python3 {baseDir}/scripts/db_query.py --action status
 --action health-submit-claim --claim-id {id}
 ```
 
-## All 234 Actions
+## All 237 Actions
 
 | Action | Description |
 |--------|-------------|
@@ -229,8 +225,13 @@ python3 {baseDir}/scripts/db_query.py --action status
 | `health-adv-submit-claim` | Submit advanced claim |
 | `health-adv-add-payment-posting` | Post advanced payment |
 | `health-adv-list-payment-postings` | List advanced postings |
+| `health-post-patient-revenue` / `health-apply-charity-care` | Post submitted claim patient revenue or apply an approved charity-care adjustment to the GL |
+| `health-record-340b-dispense` / `health-add-340b-accumulation` / `health-record-340b-accumulation` | Record a qualified 340B dispense row in the local register only |
+| `health-list-340b-dispenses` / `health-list-340b-accumulations` | List 340B accumulation rows deterministically |
+| `health-get-340b-dispense` / `health-get-340b-accumulation` | Get one 340B accumulation row |
 | `health-scrub-claim` | Pre-submission claim scrubbing |
 | `health-batch-submit-claims` | Batch submit multiple claims |
+| `health-generate-837-preview` | Generate deterministic X12 837 preview (read-only, never sent) |
 | `health-record-denial` | Record claim denial |
 | `health-list-denied-claims` | List denied claims |
 | `health-submit-appeal` | Submit denial appeal |
@@ -287,12 +288,10 @@ python3 {baseDir}/scripts/db_query.py --action status
 | `health-provider-credential-report` | Provider credential status |
 | `health-breach-summary-report` | HIPAA breach summary |
 | `health-mips-performance-dashboard` / `health-mips-submission-report` | MIPS performance dashboard + submission report |
-
 ## Key Concepts
 - **Patient = Customer**, Provider = Employee. Encounter = clinical hub for vitals/diagnoses/prescriptions/procedures/notes.
 - **Claim Lifecycle**: draft -> submitted -> accepted/denied -> paid/appealed. Prior Auth tracked with usage counts.
 - **DEA compliance**: Controlled substance prescriptions require DEA number. Schedule II cannot have refills.
 - **Advanced domains** use `adv-` prefix where names conflict with core actions.
-
 ## Technical Details (Tier 3)
 **Tables (40):** All use `healthclaw_` prefix. **Script:** `scripts/db_query.py` routes to 15 modules. **Data:** Money=TEXT(Decimal), IDs=TEXT(UUID4). **Lib:** erpclaw_lib.
